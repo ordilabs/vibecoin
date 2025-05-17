@@ -8,34 +8,51 @@ mod rpc;
 mod storage;
 mod util;
 
-#[derive(Default, Debug, PartialEq)]
+#[derive(Debug, PartialEq)]
 struct CliOptions {
     enable_rpc: bool,
     peer_addr: Option<String>,
     show_height: bool,
+    headers_path: String,
+}
+
+impl Default for CliOptions {
+    fn default() -> Self {
+        CliOptions {
+            enable_rpc: true,
+            peer_addr: None,
+            show_height: false,
+            headers_path: "headers.dat".into(),
+        }
+    }
 }
 
 fn usage(prog: &str) -> String {
     format!(
-        "Usage: {prog} [--no-rpc] [--height] [peer_addr]\n    -h, --help    Show this message",
+        "Usage: {prog} [--no-rpc] [--height] [--headers-file <path>] [peer_addr]\n    -h, --help    Show this message",
         prog = prog
     )
 }
 
 fn parse_args(args: &[String]) -> Result<CliOptions, String> {
-    let mut opts = CliOptions {
-        enable_rpc: true,
-        peer_addr: None,
-        show_height: false,
-    };
-    for arg in args.iter().skip(1) {
-        match arg.as_str() {
+    let mut opts = CliOptions::default();
+    let mut i = 1;
+    while i < args.len() {
+        match args[i].as_str() {
             "--no-rpc" => opts.enable_rpc = false,
             "--height" => opts.show_height = true,
+            "--headers-file" => {
+                i += 1;
+                if i >= args.len() {
+                    return Err(usage(&args[0]));
+                }
+                opts.headers_path = args[i].clone();
+            }
             "-h" | "--help" => return Err(usage(&args[0])),
-            _ if arg.starts_with('-') => return Err(usage(&args[0])),
-            _ => opts.peer_addr = Some(arg.clone()),
+            opt if opt.starts_with('-') => return Err(usage(&args[0])),
+            addr => opts.peer_addr = Some(addr.to_string()),
         }
+        i += 1;
     }
     Ok(opts)
 }
@@ -83,7 +100,7 @@ async fn main() {
                     let mut s = status.lock().unwrap();
                     s.peers.push(addr.clone());
                     if opts.show_height {
-                        match peer.sync_headers().await {
+                        match peer.sync_headers(&opts.headers_path).await {
                             Ok(h) => {
                                 s.block_height = h;
                                 println!("Current block height: {}", h);
@@ -141,6 +158,7 @@ mod tests {
         assert!(opts.show_height);
         assert!(opts.peer_addr.is_none());
         assert!(opts.enable_rpc);
+        assert_eq!(opts.headers_path, "headers.dat");
     }
 
     #[test]
@@ -150,6 +168,7 @@ mod tests {
         assert!(opts.show_height);
         assert_eq!(opts.peer_addr, Some("127.0.0.1:8333".into()));
         assert!(opts.enable_rpc);
+        assert_eq!(opts.headers_path, "headers.dat");
     }
 
     #[test]
@@ -163,5 +182,16 @@ mod tests {
     fn parse_args_invalid_option() {
         let args = vec!["prog".into(), "--bogus".into()];
         assert!(parse_args(&args).is_err());
+    }
+
+    #[test]
+    fn parse_args_custom_headers_file() {
+        let args = vec![
+            "prog".into(),
+            "--headers-file".into(),
+            "foo.dat".into(),
+        ];
+        let opts = parse_args(&args).unwrap();
+        assert_eq!(opts.headers_path, "foo.dat");
     }
 }
