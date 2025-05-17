@@ -1,8 +1,7 @@
 use bitcoin::blockdata::constants::genesis_block;
-use bitcoin::network::constants::Network;
+use bitcoin::Network;
 use bitcoin::consensus::encode::serialize_hex;
 use std::sync::{Arc, Mutex};
-use std::thread;
 mod base58;
 mod util;
 mod p2p;
@@ -92,7 +91,6 @@ async fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bitcoin::hashes::hex::ToHex;
 
     #[test]
     fn genesis_hex_matches_known_value() {
@@ -103,14 +101,14 @@ mod tests {
     #[test]
     fn genesis_hash_matches_known_value() {
         let genesis = genesis_block(Network::Bitcoin);
-        assert_eq!(genesis.block_hash().to_hex(),
+        assert_eq!(genesis.block_hash().to_string(),
             "000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f");
     }
 
     #[test]
     fn genesis_merkle_root_matches_known_value() {
         let genesis = genesis_block(Network::Bitcoin);
-        assert_eq!(genesis.header.merkle_root.to_hex(),
+        assert_eq!(genesis.header.merkle_root.to_string(),
             "4a5e1e4baab89f3a32518a88c31bc87f618f76673e2cc77ab2127b7afdeda33b");
     }
 

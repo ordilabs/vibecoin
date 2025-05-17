@@ -28,7 +28,8 @@ fn handle_connection(stream: &mut TcpStream, status: &Arc<Mutex<NodeStatus>>) ->
         let status = status.lock().unwrap();
         handle_request(&req, &status)
     };
-    stream.write_all(response.as_bytes())?
+    stream.write_all(response.as_bytes())?;
+    Ok(())
 }
 
 pub fn handle_request(req: &str, status: &NodeStatus) -> String {

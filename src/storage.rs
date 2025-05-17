@@ -1,9 +1,9 @@
 use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
 
-use bitcoin::blockdata::block::BlockHeader;
-use bitcoin::consensus::encode::{deserialize, serialize};
-use bitcoin::hashes::hex::{FromHex, ToHex};
+use bitcoin::blockdata::block::Header as BlockHeader;
+use bitcoin::consensus::encode::{deserialize, serialize_hex};
+use bitcoin::hex::FromHex;
 
 /// Simple on-disk header store using hex encoded headers, one per line.
 pub struct HeaderStore {
@@ -54,7 +54,7 @@ impl HeaderStore {
                     ));
                 }
             }
-            let hex = serialize(header).to_hex();
+            let hex = serialize_hex(header);
             writeln!(file, "{}", hex)?;
             self.headers.push(header.clone());
         }
