@@ -8,6 +8,10 @@
 - Run `cargo check` to verify the project builds.
 - If the command fails, note the error in the PR.
 
+## Network Issues
+Currently the container lacks network access. Skip `cargo fmt` and `cargo check`
+commands while this issue persists. Mention the lack of networking in your PR.
+
 ## Git
 - Use a single commit per change with a clear message.
 - Show `git status --short` in the PR testing section.
