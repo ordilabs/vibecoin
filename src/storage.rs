@@ -17,16 +17,17 @@ impl HeaderStore {
         let mut headers = Vec::new();
         if let Ok(data) = fs::read_to_string(path) {
             for line in data.lines() {
-                let bytes = Vec::from_hex(line).map_err(|e| {
-                    io::Error::new(io::ErrorKind::InvalidData, e.to_string())
-                })?;
-                let header: BlockHeader = deserialize(&bytes).map_err(|e| {
-                    io::Error::new(io::ErrorKind::InvalidData, e.to_string())
-                })?;
+                let bytes = Vec::from_hex(line)
+                    .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))?;
+                let header: BlockHeader = deserialize(&bytes)
+                    .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))?;
                 headers.push(header);
             }
         }
-        Ok(HeaderStore { path: path.to_string(), headers })
+        Ok(HeaderStore {
+            path: path.to_string(),
+            headers,
+        })
     }
 
     /// Current height of the stored chain.
@@ -54,6 +55,9 @@ impl HeaderStore {
                     ));
                 }
             }
+            if let Err(e) = header.validate_pow(header.target()) {
+                return Err(io::Error::new(io::ErrorKind::InvalidData, e.to_string()));
+            }
             let hex = serialize_hex(header);
             writeln!(file, "{}", hex)?;
             self.headers.push(header.clone());
@@ -69,5 +73,38 @@ impl HeaderStore {
             .take(10)
             .map(|h| h.block_hash())
             .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bitcoin::blockdata::constants::genesis_block;
+    use bitcoin::Network;
+
+    fn temp_file() -> String {
+        let dir = std::env::temp_dir();
+        let name = format!("test_headers_{}.dat", rand::random::<u64>());
+        dir.join(name).to_str().unwrap().to_string()
+    }
+
+    #[test]
+    fn append_valid_header() {
+        let path = temp_file();
+        let mut store = HeaderStore::open(&path).unwrap();
+        let genesis = genesis_block(Network::Bitcoin);
+        store.append(&[genesis.header]).unwrap();
+        assert_eq!(store.height(), 1);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn reject_invalid_pow() {
+        let path = temp_file();
+        let mut store = HeaderStore::open(&path).unwrap();
+        let mut genesis = genesis_block(Network::Bitcoin).header;
+        genesis.nonce = 0;
+        assert!(store.append(&[genesis]).is_err());
+        let _ = std::fs::remove_file(path);
     }
 }
