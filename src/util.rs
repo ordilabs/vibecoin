@@ -95,4 +95,24 @@ mod tests {
         assert_eq!(parse_money("123,456,789.00"), Some(123_456_789 * COIN));
         assert_eq!(parse_money("bogus"), None);
     }
+
+    #[test]
+    fn test_parse_money_max_value() {
+        assert_eq!(
+            parse_money("92,233,720,368.54"),
+            Some(9_223_372_036_854_000_000)
+        );
+    }
+
+    #[test]
+    fn test_parse_money_invalid_commas() {
+        assert_eq!(parse_money("1,234.5,6"), None);
+        assert_eq!(parse_money("1.2,3"), None);
+    }
+
+    #[test]
+    fn test_parse_money_overflow() {
+        assert_eq!(parse_money("92,233,720,368.55"), None);
+        assert_eq!(parse_money("10,000,000,000,000.00"), None);
+    }
 }
