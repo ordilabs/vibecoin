@@ -1,11 +1,14 @@
 use bitcoin::blockdata::constants::genesis_block;
 use bitcoin::network::constants::Network;
 use bitcoin::consensus::encode::serialize_hex;
+use std::sync::{Arc, Mutex};
+use std::thread;
 mod utils;
 
 mod base58;
 mod util;
 mod p2p;
+mod rpc;
 
 fn genesis_hex() -> String {
     let genesis = genesis_block(Network::Bitcoin);
@@ -14,11 +17,36 @@ fn genesis_hex() -> String {
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    if let Some(addr) = args.get(1) {
+    let mut enable_rpc = true;
+    let mut peer_addr: Option<String> = None;
+    for arg in args.iter().skip(1) {
+        if arg == "--no-rpc" {
+            enable_rpc = false;
+        } else {
+            peer_addr = Some(arg.clone());
+        }
+    }
+
+    let status = Arc::new(Mutex::new(rpc::NodeStatus { block_height: 0, peers: Vec::new() }));
+    let _rpc_handle = if enable_rpc {
+        match rpc::start("127.0.0.1:8080", Arc::clone(&status)) {
+            Ok(h) => Some(h),
+            Err(e) => {
+                eprintln!("Failed to start RPC server: {}", e);
+                None
+            }
+        }
+    } else { None };
+
+    if let Some(addr) = peer_addr {
         println!("Connecting to {}...", addr);
-        match p2p::Peer::connect(addr) {
+        match p2p::Peer::connect(&addr) {
             Ok(mut peer) => match peer.handshake() {
-                Ok(_) => println!("Handshake with {} successful", addr),
+                Ok(_) => {
+                    println!("Handshake with {} successful", addr);
+                    let mut s = status.lock().unwrap();
+                    s.peers.push(addr);
+                }
                 Err(e) => eprintln!("Handshake failed: {}", e),
             },
             Err(e) => eprintln!("Connection error: {}", e),
