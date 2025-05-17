@@ -1,5 +1,5 @@
-use std::io::{Read, Write};
-use std::net::TcpStream;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::TcpStream;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use bitcoin::consensus::encode::{serialize, deserialize};
@@ -17,14 +17,16 @@ pub struct Peer {
 }
 
 impl Peer {
-    /// Connect to the given address (host:port) and perform version handshake.
+    /// Connect to the given address (host:port).
     pub fn connect(addr: &str) -> std::io::Result<Self> {
-        let stream = TcpStream::connect(addr)?;
+        let std_stream = std::net::TcpStream::connect(addr)?;
+        std_stream.set_nonblocking(true)?;
+        let stream = TcpStream::from_std(std_stream)?;
         Ok(Peer { stream })
     }
 
     /// Perform the Bitcoin version handshake.
-    pub fn handshake(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn handshake(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         let local = self.stream.local_addr()?;
         let remote = self.stream.peer_addr()?;
 
@@ -47,11 +49,11 @@ impl Peer {
             payload: NetworkMessage::Version(version),
         };
         let bytes = serialize(&msg);
-        self.stream.write_all(&bytes)?;
+        self.stream.write_all(&bytes).await?;
 
         // Read remote version message
         let mut buf = vec![0u8; 1024];
-        let n = self.stream.read(&mut buf)?;
+        let n = self.stream.read(&mut buf).await?;
         let incoming: RawNetworkMessage = deserialize(&buf[..n])?;
         match incoming.payload {
             NetworkMessage::Version(_) => {
@@ -61,7 +63,7 @@ impl Peer {
                     payload: NetworkMessage::Verack,
                 };
                 let bytes = serialize(&verack);
-                self.stream.write_all(&bytes)?;
+                self.stream.write_all(&bytes).await?;
                 Ok(())
             }
             _ => Err("unexpected message".into()),
@@ -70,7 +72,7 @@ impl Peer {
 
     /// Synchronize block headers with the connected peer.
     /// Load existing headers from disk and fetch new ones from the peer.
-    pub fn sync_headers(&mut self) -> Result<u64, Box<dyn std::error::Error>> {
+    pub async fn sync_headers(&mut self) -> Result<u64, Box<dyn std::error::Error>> {
         let mut store = HeaderStore::open("headers.dat")?;
         let mut locator = store.locator_hashes();
 
@@ -85,10 +87,10 @@ impl Peer {
                 payload: NetworkMessage::GetHeaders(get),
             };
             let bytes = serialize(&req);
-            self.stream.write_all(&bytes)?;
+            self.stream.write_all(&bytes).await?;
 
             let mut buf = vec![0u8; 4096];
-            let n = self.stream.read(&mut buf)?;
+            let n = self.stream.read(&mut buf).await?;
             let incoming: RawNetworkMessage = deserialize(&buf[..n])?;
             match incoming.payload {
                 NetworkMessage::Headers(headers) => {
@@ -103,5 +105,78 @@ impl Peer {
         }
 
         Ok(store.height())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::net::TcpListener;
+
+    #[tokio::test]
+    async fn handshake_succeeds() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut buf = vec![0u8; 1024];
+            let n = socket.read(&mut buf).await.unwrap();
+            let msg: RawNetworkMessage = deserialize(&buf[..n]).unwrap();
+            if let NetworkMessage::Version(v) = msg.payload {
+                let resp = RawNetworkMessage {
+                    magic: Network::Bitcoin.magic(),
+                    payload: NetworkMessage::Version(v),
+                };
+                socket.write_all(&serialize(&resp)).await.unwrap();
+                let n = socket.read(&mut buf).await.unwrap();
+                let msg: RawNetworkMessage = deserialize(&buf[..n]).unwrap();
+                assert!(matches!(msg.payload, NetworkMessage::Verack));
+            } else {
+                panic!("unexpected message");
+            }
+        });
+
+        let mut peer = Peer::connect(&addr.to_string()).unwrap();
+        peer.handshake().await.unwrap();
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn sync_headers_empty() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut buf = vec![0u8; 1024];
+            let n = socket.read(&mut buf).await.unwrap();
+            let msg: RawNetworkMessage = deserialize(&buf[..n]).unwrap();
+            if let NetworkMessage::Version(v) = msg.payload {
+                let resp = RawNetworkMessage {
+                    magic: Network::Bitcoin.magic(),
+                    payload: NetworkMessage::Version(v),
+                };
+                socket.write_all(&serialize(&resp)).await.unwrap();
+                let _ = socket.read(&mut buf).await.unwrap();
+            }
+
+            let mut buf = vec![0u8; 4096];
+            let n = socket.read(&mut buf).await.unwrap();
+            let msg: RawNetworkMessage = deserialize(&buf[..n]).unwrap();
+            if matches!(msg.payload, NetworkMessage::GetHeaders(_)) {
+                let resp = RawNetworkMessage {
+                    magic: Network::Bitcoin.magic(),
+                    payload: NetworkMessage::Headers(vec![]),
+                };
+                socket.write_all(&serialize(&resp)).await.unwrap();
+            }
+        });
+
+        let mut peer = Peer::connect(&addr.to_string()).unwrap();
+        peer.handshake().await.unwrap();
+        let h = peer.sync_headers().await.unwrap();
+        assert_eq!(h, 0);
+        server.await.unwrap();
     }
 }
