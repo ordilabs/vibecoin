@@ -7,8 +7,9 @@ The project aims to reimplement core Bitcoin functionality in Rust. Below are th
 
 ## Next Steps Towards MVP
 1. **Network Handshake**
-   - Implement peer connections over TCP using an async runtime (e.g. `tokio`).
+   - Implement peer connections over TCP.
    - Exchange `version` and `verack` messages as defined in Bitcoin Core `protocol.h`.
+   - **Status**: basic synchronous handshake implemented.
 2. **Header Synchronization**
    - Send `getheaders` and process incoming `headers` messages.
    - Validate proof-of-work for each header and maintain the best chain tip in memory.

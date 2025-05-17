@@ -8,7 +8,9 @@ Vibecoin is an experiment to reimplement Bitcoin in Rust using modern tooling wh
 cargo run
 ```
 
-The initial code requires Rust and will fetch dependencies automatically.
+The initial code requires Rust and will fetch dependencies automatically. When
+run with an argument like `cargo run -- 127.0.0.1:8333` it will attempt a simple
+`version` handshake with the specified peer.
 
 ## Development Plan
 
