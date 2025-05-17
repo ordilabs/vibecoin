@@ -6,6 +6,7 @@ mod utils;
 mod base58;
 mod util;
 mod p2p;
+mod header_store;
 
 fn genesis_hex() -> String {
     let genesis = genesis_block(Network::Bitcoin);
@@ -13,6 +14,15 @@ fn genesis_hex() -> String {
 }
 
 fn main() {
+    let mut store = match header_store::HeaderStore::load_default() {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("Failed to load headers: {}", e);
+            return;
+        }
+    };
+    println!("Loaded {} headers", store.height() + 1);
+
     let args: Vec<String> = std::env::args().collect();
     if let Some(addr) = args.get(1) {
         println!("Connecting to {}...", addr);

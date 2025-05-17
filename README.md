@@ -25,6 +25,7 @@ The project will progress in several stages:
 - Implement minimal networking to connect to peers and exchange version messages.
 - Parse and validate block headers.
 - Provide simple CLI to show synced block height.
+- Persist block headers to `~/.vibecoin/headers.dat` and reload them on startup.
 
 ### 0.1 Stage
 - Validate and store blocks to disk using a simplified chain state.
