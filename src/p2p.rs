@@ -64,4 +64,12 @@ impl Peer {
             _ => Err("unexpected message".into()),
         }
     }
+
+    /// Synchronize block headers with the connected peer.
+    ///
+    /// This is currently a placeholder that returns height 0.
+    pub fn sync_headers(&mut self) -> Result<u64, Box<dyn std::error::Error>> {
+        // TODO: implement header synchronization using `getheaders`/`headers` messages
+        Ok(0)
+    }
 }
