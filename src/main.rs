@@ -3,8 +3,6 @@ use bitcoin::network::constants::Network;
 use bitcoin::consensus::encode::serialize_hex;
 use std::sync::{Arc, Mutex};
 use std::thread;
-mod utils;
-
 mod base58;
 mod util;
 mod p2p;
