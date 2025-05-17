@@ -2,13 +2,14 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use bitcoin::consensus::encode::{serialize, deserialize};
-use bitcoin::network::address::Address;
-use bitcoin::network::constants::{Network, ServiceFlags, PROTOCOL_VERSION};
-use bitcoin::network::message::{NetworkMessage, RawNetworkMessage};
-use bitcoin::network::message_network::VersionMessage;
-use bitcoin::network::message_blockdata::GetHeadersMessage;
-use bitcoin::BlockHash;
+use bitcoin::consensus::encode::{deserialize, serialize};
+use bitcoin::p2p::address::Address;
+use bitcoin::p2p::{message::NetworkMessage, message::RawNetworkMessage};
+use bitcoin::p2p::message_blockdata::GetHeadersMessage;
+use bitcoin::p2p::message_network::VersionMessage;
+use bitcoin::p2p::{PROTOCOL_VERSION, ServiceFlags};
+use bitcoin::Network;
+use bitcoin::hashes::Hash;
 use crate::storage::HeaderStore;
 
 /// Simple peer connection that performs a version handshake.
@@ -31,7 +32,7 @@ impl Peer {
         let remote = self.stream.peer_addr()?;
 
         let version = VersionMessage {
-            version: PROTOCOL_VERSION as i32,
+            version: PROTOCOL_VERSION,
             services: ServiceFlags::NONE,
             timestamp: SystemTime::now()
                 .duration_since(UNIX_EPOCH)?
@@ -44,10 +45,7 @@ impl Peer {
             relay: false,
         };
 
-        let msg = RawNetworkMessage {
-            magic: Network::Bitcoin.magic(),
-            payload: NetworkMessage::Version(version),
-        };
+        let msg = RawNetworkMessage::new(Network::Bitcoin.magic(), NetworkMessage::Version(version));
         let bytes = serialize(&msg);
         self.stream.write_all(&bytes).await?;
 
@@ -55,13 +53,10 @@ impl Peer {
         let mut buf = vec![0u8; 1024];
         let n = self.stream.read(&mut buf).await?;
         let incoming: RawNetworkMessage = deserialize(&buf[..n])?;
-        match incoming.payload {
+        match incoming.payload() {
             NetworkMessage::Version(_) => {
                 // Send verack
-                let verack = RawNetworkMessage {
-                    magic: Network::Bitcoin.magic(),
-                    payload: NetworkMessage::Verack,
-                };
+                let verack = RawNetworkMessage::new(Network::Bitcoin.magic(), NetworkMessage::Verack);
                 let bytes = serialize(&verack);
                 self.stream.write_all(&bytes).await?;
                 Ok(())
@@ -78,21 +73,21 @@ impl Peer {
 
         loop {
             let get = GetHeadersMessage {
-                version: PROTOCOL_VERSION as i32,
+                version: PROTOCOL_VERSION,
                 locator_hashes: locator.clone(),
-                stop_hash: BlockHash::default(),
+                stop_hash: bitcoin::BlockHash::all_zeros(),
             };
-            let req = RawNetworkMessage {
-                magic: Network::Bitcoin.magic(),
-                payload: NetworkMessage::GetHeaders(get),
-            };
+            let req = RawNetworkMessage::new(
+                Network::Bitcoin.magic(),
+                NetworkMessage::GetHeaders(get),
+            );
             let bytes = serialize(&req);
             self.stream.write_all(&bytes).await?;
 
             let mut buf = vec![0u8; 4096];
             let n = self.stream.read(&mut buf).await?;
             let incoming: RawNetworkMessage = deserialize(&buf[..n])?;
-            match incoming.payload {
+            match incoming.payload() {
                 NetworkMessage::Headers(headers) => {
                     if headers.is_empty() {
                         break;
@@ -123,15 +118,15 @@ mod tests {
             let mut buf = vec![0u8; 1024];
             let n = socket.read(&mut buf).await.unwrap();
             let msg: RawNetworkMessage = deserialize(&buf[..n]).unwrap();
-            if let NetworkMessage::Version(v) = msg.payload {
-                let resp = RawNetworkMessage {
-                    magic: Network::Bitcoin.magic(),
-                    payload: NetworkMessage::Version(v),
-                };
+            if let NetworkMessage::Version(v) = msg.payload() {
+                let resp = RawNetworkMessage::new(
+                    Network::Bitcoin.magic(),
+                    NetworkMessage::Version(v.clone()),
+                );
                 socket.write_all(&serialize(&resp)).await.unwrap();
                 let n = socket.read(&mut buf).await.unwrap();
                 let msg: RawNetworkMessage = deserialize(&buf[..n]).unwrap();
-                assert!(matches!(msg.payload, NetworkMessage::Verack));
+                assert!(matches!(msg.payload(), NetworkMessage::Verack));
             } else {
                 panic!("unexpected message");
             }
@@ -152,11 +147,11 @@ mod tests {
             let mut buf = vec![0u8; 1024];
             let n = socket.read(&mut buf).await.unwrap();
             let msg: RawNetworkMessage = deserialize(&buf[..n]).unwrap();
-            if let NetworkMessage::Version(v) = msg.payload {
-                let resp = RawNetworkMessage {
-                    magic: Network::Bitcoin.magic(),
-                    payload: NetworkMessage::Version(v),
-                };
+            if let NetworkMessage::Version(v) = msg.payload() {
+                let resp = RawNetworkMessage::new(
+                    Network::Bitcoin.magic(),
+                    NetworkMessage::Version(v.clone()),
+                );
                 socket.write_all(&serialize(&resp)).await.unwrap();
                 let _ = socket.read(&mut buf).await.unwrap();
             }
@@ -164,11 +159,11 @@ mod tests {
             let mut buf = vec![0u8; 4096];
             let n = socket.read(&mut buf).await.unwrap();
             let msg: RawNetworkMessage = deserialize(&buf[..n]).unwrap();
-            if matches!(msg.payload, NetworkMessage::GetHeaders(_)) {
-                let resp = RawNetworkMessage {
-                    magic: Network::Bitcoin.magic(),
-                    payload: NetworkMessage::Headers(vec![]),
-                };
+            if matches!(msg.payload(), NetworkMessage::GetHeaders(_)) {
+                let resp = RawNetworkMessage::new(
+                    Network::Bitcoin.magic(),
+                    NetworkMessage::Headers(vec![]),
+                );
                 socket.write_all(&serialize(&resp)).await.unwrap();
             }
         });
