@@ -18,7 +18,10 @@ fn main() {
         println!("Connecting to {}...", addr);
         match p2p::Peer::connect(addr) {
             Ok(mut peer) => match peer.handshake() {
-                Ok(_) => println!("Handshake with {} successful", addr),
+                Ok(_) => {
+                    println!("Handshake with {} successful", addr);
+                    println!("Synced to height {}", peer.tip_height());
+                }
                 Err(e) => eprintln!("Handshake failed: {}", e),
             },
             Err(e) => eprintln!("Connection error: {}", e),
