@@ -31,6 +31,13 @@ pub fn parse_money(s: &str) -> Option<i64> {
     let s = s.trim();
     if s.is_empty() { return None; }
     let mut chars = s.chars().peekable();
+    let mut negative = false;
+    if let Some(&c) = chars.peek() {
+        if c == '+' || c == '-' {
+            negative = c == '-';
+            chars.next();
+        }
+    }
     let mut whole = String::new();
     while let Some(&c) = chars.peek() {
         if c == ',' {
@@ -70,7 +77,7 @@ pub fn parse_money(s: &str) -> Option<i64> {
     let value = pre.checked_mul(CENT)?;
     if value / CENT != pre { return None; }
     if value / COIN != n_whole { return None; }
-    Some(value)
+    if negative { Some(-value) } else { Some(value) }
 }
 
 #[cfg(test)]
@@ -91,6 +98,8 @@ mod tests {
     #[test]
     fn test_parse_money() {
         assert_eq!(parse_money("1.00"), Some(COIN));
+        assert_eq!(parse_money("+1.00"), Some(COIN));
+        assert_eq!(parse_money("-1.00"), Some(-COIN));
         assert_eq!(parse_money("0.01"), Some(CENT));
         assert_eq!(parse_money("123,456,789.00"), Some(123_456_789 * COIN));
         assert_eq!(parse_money("bogus"), None);
