@@ -14,6 +14,7 @@ struct CliOptions {
     peer_addr: Option<String>,
     show_height: bool,
     headers_path: String,
+    rpc_addr: String,
 }
 
 impl Default for CliOptions {
@@ -23,13 +24,14 @@ impl Default for CliOptions {
             peer_addr: None,
             show_height: false,
             headers_path: "headers.dat".into(),
+            rpc_addr: "127.0.0.1:8080".into(),
         }
     }
 }
 
 fn usage(prog: &str) -> String {
     format!(
-        "Usage: {prog} [--no-rpc] [--height] [--headers-file <path>] [peer_addr]\n    -h, --help    Show this message",
+        "Usage: {prog} [--no-rpc] [--rpc-addr <addr>] [--height] [--headers-file <path>] [peer_addr]\n    -h, --help    Show this message",
         prog = prog
     )
 }
@@ -41,6 +43,13 @@ fn parse_args(args: &[String]) -> Result<CliOptions, String> {
         match args[i].as_str() {
             "--no-rpc" => opts.enable_rpc = false,
             "--height" => opts.show_height = true,
+            "--rpc-addr" => {
+                i += 1;
+                if i >= args.len() {
+                    return Err(usage(&args[0]));
+                }
+                opts.rpc_addr = args[i].clone();
+            }
             "--headers-file" => {
                 i += 1;
                 if i >= args.len() {
@@ -80,7 +89,7 @@ async fn main() {
         peers: Vec::new(),
     }));
     let _rpc_handle = if enable_rpc {
-        match rpc::start("127.0.0.1:8080", Arc::clone(&status)) {
+        match rpc::start(&opts.rpc_addr, Arc::clone(&status)) {
             Ok(h) => Some(h),
             Err(e) => {
                 eprintln!("Failed to start RPC server: {}", e);
@@ -159,6 +168,7 @@ mod tests {
         assert!(opts.peer_addr.is_none());
         assert!(opts.enable_rpc);
         assert_eq!(opts.headers_path, "headers.dat");
+        assert_eq!(opts.rpc_addr, "127.0.0.1:8080");
     }
 
     #[test]
@@ -169,6 +179,7 @@ mod tests {
         assert_eq!(opts.peer_addr, Some("127.0.0.1:8333".into()));
         assert!(opts.enable_rpc);
         assert_eq!(opts.headers_path, "headers.dat");
+        assert_eq!(opts.rpc_addr, "127.0.0.1:8080");
     }
 
     #[test]
@@ -186,12 +197,16 @@ mod tests {
 
     #[test]
     fn parse_args_custom_headers_file() {
-        let args = vec![
-            "prog".into(),
-            "--headers-file".into(),
-            "foo.dat".into(),
-        ];
+        let args = vec!["prog".into(), "--headers-file".into(), "foo.dat".into()];
         let opts = parse_args(&args).unwrap();
         assert_eq!(opts.headers_path, "foo.dat");
+        assert_eq!(opts.rpc_addr, "127.0.0.1:8080");
+    }
+
+    #[test]
+    fn parse_args_custom_rpc_addr() {
+        let args = vec!["prog".into(), "--rpc-addr".into(), "0.0.0.0:9999".into()];
+        let opts = parse_args(&args).unwrap();
+        assert_eq!(opts.rpc_addr, "0.0.0.0:9999");
     }
 }
