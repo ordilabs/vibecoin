@@ -1,12 +1,12 @@
 use bitcoin::blockdata::constants::genesis_block;
-use bitcoin::Network;
 use bitcoin::consensus::encode::serialize_hex;
+use bitcoin::Network;
 use std::sync::{Arc, Mutex};
 mod base58;
-mod util;
 mod p2p;
 mod rpc;
 mod storage;
+mod util;
 
 #[derive(Default, Debug, PartialEq)]
 struct CliOptions {
@@ -15,22 +15,29 @@ struct CliOptions {
     show_height: bool,
 }
 
-fn parse_args(args: &[String]) -> CliOptions {
+fn usage(prog: &str) -> String {
+    format!(
+        "Usage: {prog} [--no-rpc] [--height] [peer_addr]\n    -h, --help    Show this message",
+        prog = prog
+    )
+}
+
+fn parse_args(args: &[String]) -> Result<CliOptions, String> {
     let mut opts = CliOptions {
         enable_rpc: true,
         peer_addr: None,
         show_height: false,
     };
     for arg in args.iter().skip(1) {
-        if arg == "--no-rpc" {
-            opts.enable_rpc = false;
-        } else if arg == "--height" {
-            opts.show_height = true;
-        } else {
-            opts.peer_addr = Some(arg.clone());
+        match arg.as_str() {
+            "--no-rpc" => opts.enable_rpc = false,
+            "--height" => opts.show_height = true,
+            "-h" | "--help" => return Err(usage(&args[0])),
+            _ if arg.starts_with('-') => return Err(usage(&args[0])),
+            _ => opts.peer_addr = Some(arg.clone()),
         }
     }
-    opts
+    Ok(opts)
 }
 
 fn genesis_hex() -> String {
@@ -41,11 +48,20 @@ fn genesis_hex() -> String {
 #[tokio::main]
 async fn main() {
     let args: Vec<String> = std::env::args().collect();
-    let opts = parse_args(&args);
+    let opts = match parse_args(&args) {
+        Ok(o) => o,
+        Err(msg) => {
+            println!("{}", msg);
+            std::process::exit(0);
+        }
+    };
     let enable_rpc = opts.enable_rpc;
     let peer_addr = opts.peer_addr.clone();
 
-    let status = Arc::new(Mutex::new(rpc::NodeStatus { block_height: 0, peers: Vec::new() }));
+    let status = Arc::new(Mutex::new(rpc::NodeStatus {
+        block_height: 0,
+        peers: Vec::new(),
+    }));
     let _rpc_handle = if enable_rpc {
         match rpc::start("127.0.0.1:8080", Arc::clone(&status)) {
             Ok(h) => Some(h),
@@ -54,7 +70,9 @@ async fn main() {
                 None
             }
         }
-    } else { None };
+    } else {
+        None
+    };
 
     if let Some(addr) = peer_addr {
         println!("Connecting to {}...", addr);
@@ -101,21 +119,25 @@ mod tests {
     #[test]
     fn genesis_hash_matches_known_value() {
         let genesis = genesis_block(Network::Bitcoin);
-        assert_eq!(genesis.block_hash().to_string(),
-            "000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f");
+        assert_eq!(
+            genesis.block_hash().to_string(),
+            "000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f"
+        );
     }
 
     #[test]
     fn genesis_merkle_root_matches_known_value() {
         let genesis = genesis_block(Network::Bitcoin);
-        assert_eq!(genesis.header.merkle_root.to_string(),
-            "4a5e1e4baab89f3a32518a88c31bc87f618f76673e2cc77ab2127b7afdeda33b");
+        assert_eq!(
+            genesis.header.merkle_root.to_string(),
+            "4a5e1e4baab89f3a32518a88c31bc87f618f76673e2cc77ab2127b7afdeda33b"
+        );
     }
 
     #[test]
     fn parse_args_height_flag() {
         let args = vec!["prog".into(), "--height".into()];
-        let opts = parse_args(&args);
+        let opts = parse_args(&args).unwrap();
         assert!(opts.show_height);
         assert!(opts.peer_addr.is_none());
         assert!(opts.enable_rpc);
@@ -124,9 +146,22 @@ mod tests {
     #[test]
     fn parse_args_peer_and_height() {
         let args = vec!["prog".into(), "--height".into(), "127.0.0.1:8333".into()];
-        let opts = parse_args(&args);
+        let opts = parse_args(&args).unwrap();
         assert!(opts.show_height);
         assert_eq!(opts.peer_addr, Some("127.0.0.1:8333".into()));
         assert!(opts.enable_rpc);
+    }
+
+    #[test]
+    fn parse_args_help_output() {
+        let args = vec!["prog".into(), "--help".into()];
+        let err = parse_args(&args).unwrap_err();
+        assert!(err.contains("Usage:"));
+    }
+
+    #[test]
+    fn parse_args_invalid_option() {
+        let args = vec!["prog".into(), "--bogus".into()];
+        assert!(parse_args(&args).is_err());
     }
 }
