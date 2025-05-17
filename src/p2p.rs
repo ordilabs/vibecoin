@@ -7,6 +7,9 @@ use bitcoin::network::address::Address;
 use bitcoin::network::constants::{Network, ServiceFlags, PROTOCOL_VERSION};
 use bitcoin::network::message::{NetworkMessage, RawNetworkMessage};
 use bitcoin::network::message_network::VersionMessage;
+use bitcoin::network::message_blockdata::GetHeadersMessage;
+use bitcoin::BlockHash;
+use crate::storage::HeaderStore;
 
 /// Simple peer connection that performs a version handshake.
 pub struct Peer {
@@ -66,10 +69,39 @@ impl Peer {
     }
 
     /// Synchronize block headers with the connected peer.
-    ///
-    /// This is currently a placeholder that returns height 0.
+    /// Load existing headers from disk and fetch new ones from the peer.
     pub fn sync_headers(&mut self) -> Result<u64, Box<dyn std::error::Error>> {
-        // TODO: implement header synchronization using `getheaders`/`headers` messages
-        Ok(0)
+        let mut store = HeaderStore::open("headers.dat")?;
+        let mut locator = store.locator_hashes();
+
+        loop {
+            let get = GetHeadersMessage {
+                version: PROTOCOL_VERSION as i32,
+                locator_hashes: locator.clone(),
+                stop_hash: BlockHash::default(),
+            };
+            let req = RawNetworkMessage {
+                magic: Network::Bitcoin.magic(),
+                payload: NetworkMessage::GetHeaders(get),
+            };
+            let bytes = serialize(&req);
+            self.stream.write_all(&bytes)?;
+
+            let mut buf = vec![0u8; 4096];
+            let n = self.stream.read(&mut buf)?;
+            let incoming: RawNetworkMessage = deserialize(&buf[..n])?;
+            match incoming.payload {
+                NetworkMessage::Headers(headers) => {
+                    if headers.is_empty() {
+                        break;
+                    }
+                    store.append(&headers)?;
+                    locator = store.locator_hashes();
+                }
+                _ => {}
+            }
+        }
+
+        Ok(store.height())
     }
 }
