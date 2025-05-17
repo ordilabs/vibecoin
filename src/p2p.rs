@@ -59,7 +59,23 @@ impl Peer {
                 let verack = RawNetworkMessage::new(Network::Bitcoin.magic(), NetworkMessage::Verack);
                 let bytes = serialize(&verack);
                 self.stream.write_all(&bytes).await?;
-                Ok(())
+
+                // Wait for peer verack
+                let mut all = Vec::new();
+                loop {
+                    let mut tmp = vec![0u8; 1024];
+                    let n = self.stream.read(&mut tmp).await?;
+                    if n == 0 {
+                        return Err("connection closed".into());
+                    }
+                    all.extend_from_slice(&tmp[..n]);
+                    if let Ok(reply) = deserialize::<RawNetworkMessage>(&all) {
+                        return match reply.payload() {
+                            NetworkMessage::Verack => Ok(()),
+                            _ => Err("unexpected message".into()),
+                        };
+                    }
+                }
             }
             _ => Err("unexpected message".into()),
         }
@@ -127,6 +143,11 @@ mod tests {
                 let n = socket.read(&mut buf).await.unwrap();
                 let msg: RawNetworkMessage = deserialize(&buf[..n]).unwrap();
                 assert!(matches!(msg.payload(), NetworkMessage::Verack));
+                let resp = RawNetworkMessage::new(
+                    Network::Bitcoin.magic(),
+                    NetworkMessage::Verack,
+                );
+                socket.write_all(&serialize(&resp)).await.unwrap();
             } else {
                 panic!("unexpected message");
             }
@@ -154,6 +175,11 @@ mod tests {
                 );
                 socket.write_all(&serialize(&resp)).await.unwrap();
                 let _ = socket.read(&mut buf).await.unwrap();
+                let resp = RawNetworkMessage::new(
+                    Network::Bitcoin.magic(),
+                    NetworkMessage::Verack,
+                );
+                socket.write_all(&serialize(&resp)).await.unwrap();
             }
 
             let mut buf = vec![0u8; 4096];
@@ -172,6 +198,37 @@ mod tests {
         peer.handshake().await.unwrap();
         let h = peer.sync_headers().await.unwrap();
         assert_eq!(h, 0);
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn handshake_requires_verack() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut buf = vec![0u8; 1024];
+            let n = socket.read(&mut buf).await.unwrap();
+            let msg: RawNetworkMessage = deserialize(&buf[..n]).unwrap();
+            if let NetworkMessage::Version(v) = msg.payload() {
+                let resp = RawNetworkMessage::new(
+                    Network::Bitcoin.magic(),
+                    NetworkMessage::Version(v.clone()),
+                );
+                socket.write_all(&serialize(&resp)).await.unwrap();
+                let _ = socket.read(&mut buf).await.unwrap();
+                // send ping instead of verack
+                let resp = RawNetworkMessage::new(
+                    Network::Bitcoin.magic(),
+                    NetworkMessage::Ping(0),
+                );
+                socket.write_all(&serialize(&resp)).await.unwrap();
+            }
+        });
+
+        let mut peer = Peer::connect(&addr.to_string()).unwrap();
+        assert!(peer.handshake().await.is_err());
         server.await.unwrap();
     }
 }
