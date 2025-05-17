@@ -1,6 +1,7 @@
 use bitcoin::blockdata::constants::genesis_block;
 use bitcoin::network::constants::Network;
 use bitcoin::consensus::encode::serialize_hex;
+mod utils;
 
 fn genesis_hex() -> String {
     let genesis = genesis_block(Network::Bitcoin);
