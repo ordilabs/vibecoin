@@ -83,8 +83,11 @@ impl Peer {
 
     /// Synchronize block headers with the connected peer.
     /// Load existing headers from disk and fetch new ones from the peer.
-    pub async fn sync_headers(&mut self) -> Result<u64, Box<dyn std::error::Error>> {
-        let mut store = HeaderStore::open("headers.dat")?;
+    pub async fn sync_headers(
+        &mut self,
+        path: &str,
+    ) -> Result<u64, Box<dyn std::error::Error>> {
+        let mut store = HeaderStore::open(path)?;
         let mut locator = store.locator_hashes();
 
         loop {
@@ -196,7 +199,7 @@ mod tests {
 
         let mut peer = Peer::connect(&addr.to_string()).unwrap();
         peer.handshake().await.unwrap();
-        let h = peer.sync_headers().await.unwrap();
+        let h = peer.sync_headers("headers.dat").await.unwrap();
         assert_eq!(h, 0);
         server.await.unwrap();
     }
