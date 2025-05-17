@@ -9,6 +9,7 @@ mod base58;
 mod util;
 mod p2p;
 mod rpc;
+mod storage;
 
 #[derive(Default, Debug, PartialEq)]
 struct CliOptions {
