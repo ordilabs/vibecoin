@@ -41,6 +41,21 @@ pub fn handle_request(req: &str, status: &NodeStatus) -> String {
             body.len(),
             body
         )
+    } else if req.starts_with("GET /peers") {
+        let body = format!(
+            "[{}]",
+            status
+                .peers
+                .iter()
+                .map(|p| format!("\"{}\"", p))
+                .collect::<Vec<_>>()
+                .join(",")
+        );
+        format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+            body.len(),
+            body
+        )
     } else {
         let body = "Not Found".to_string();
         format!(
@@ -62,6 +77,19 @@ mod tests {
         let resp = handle_request(req, &status);
         assert!(resp.starts_with("HTTP/1.1 200"));
         assert!(resp.contains("\"block_height\":42"));
+    }
+
+    #[test]
+    fn peers_ok() {
+        let status = NodeStatus {
+            block_height: 0,
+            peers: vec!["10.0.0.1:8333".to_string(), "8.8.8.8:8333".to_string()],
+        };
+        let req = "GET /peers HTTP/1.1\r\n\r\n";
+        let resp = handle_request(req, &status);
+        assert!(resp.starts_with("HTTP/1.1 200"));
+        let body = resp.split("\r\n\r\n").nth(1).unwrap();
+        assert_eq!(body, "[\"10.0.0.1:8333\",\"8.8.8.8:8333\"]");
     }
 
     #[test]
