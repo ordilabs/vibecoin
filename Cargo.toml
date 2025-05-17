@@ -6,3 +6,4 @@ license = "MIT"
 
 [dependencies]
 bitcoin = "0.32.6"
+rand = "0.8"

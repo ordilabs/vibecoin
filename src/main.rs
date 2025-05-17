@@ -5,6 +5,7 @@ mod utils;
 
 mod base58;
 mod util;
+mod p2p;
 
 fn genesis_hex() -> String {
     let genesis = genesis_block(Network::Bitcoin);
@@ -12,8 +13,20 @@ fn genesis_hex() -> String {
 }
 
 fn main() {
-    let hex = genesis_hex();
-    println!("Bitcoin genesis block:\n{}", hex);
+    let args: Vec<String> = std::env::args().collect();
+    if let Some(addr) = args.get(1) {
+        println!("Connecting to {}...", addr);
+        match p2p::Peer::connect(addr) {
+            Ok(mut peer) => match peer.handshake() {
+                Ok(_) => println!("Handshake with {} successful", addr),
+                Err(e) => eprintln!("Handshake failed: {}", e),
+            },
+            Err(e) => eprintln!("Connection error: {}", e),
+        }
+    } else {
+        let hex = genesis_hex();
+        println!("Bitcoin genesis block:\n{}", hex);
+    }
 }
 
 #[cfg(test)]
