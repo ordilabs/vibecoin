@@ -9,7 +9,7 @@ use bitcoin::network::message::{NetworkMessage, RawNetworkMessage};
 use bitcoin::network::message_network::VersionMessage;
 use bitcoin::network::message_blockdata::GetHeadersMessage;
 use bitcoin::BlockHash;
-use crate::storage::HeaderStore;
+use crate::storage::{HeaderStore, header_pow_valid};
 
 /// Simple peer connection that performs a version handshake.
 pub struct Peer {
@@ -97,7 +97,21 @@ impl Peer {
                     if headers.is_empty() {
                         break;
                     }
-                    store.append(&headers)?;
+                    let mut valid = Vec::new();
+                    for h in headers {
+                        if header_pow_valid(&h) {
+                            valid.push(h);
+                        } else {
+                            eprintln!(
+                                "rejecting header {}: invalid proof-of-work",
+                                h.block_hash()
+                            );
+                        }
+                    }
+                    if valid.is_empty() {
+                        break;
+                    }
+                    store.append(&valid)?;
                     locator = store.locator_hashes();
                 }
                 _ => {}
@@ -112,6 +126,7 @@ impl Peer {
 mod tests {
     use super::*;
     use tokio::net::TcpListener;
+    use bitcoin::blockdata::block::BlockHeader;
 
     #[tokio::test]
     async fn handshake_succeeds() {
@@ -168,6 +183,52 @@ mod tests {
                 let resp = RawNetworkMessage {
                     magic: Network::Bitcoin.magic(),
                     payload: NetworkMessage::Headers(vec![]),
+                };
+                socket.write_all(&serialize(&resp)).await.unwrap();
+            }
+        });
+
+        let mut peer = Peer::connect(&addr.to_string()).unwrap();
+        peer.handshake().await.unwrap();
+        let h = peer.sync_headers().await.unwrap();
+        assert_eq!(h, 0);
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn sync_headers_invalid_pow() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut buf = vec![0u8; 1024];
+            let n = socket.read(&mut buf).await.unwrap();
+            let msg: RawNetworkMessage = deserialize(&buf[..n]).unwrap();
+            if let NetworkMessage::Version(v) = msg.payload {
+                let resp = RawNetworkMessage {
+                    magic: Network::Bitcoin.magic(),
+                    payload: NetworkMessage::Version(v),
+                };
+                socket.write_all(&serialize(&resp)).await.unwrap();
+                let _ = socket.read(&mut buf).await.unwrap();
+            }
+
+            let mut buf = vec![0u8; 4096];
+            let n = socket.read(&mut buf).await.unwrap();
+            let msg: RawNetworkMessage = deserialize(&buf[..n]).unwrap();
+            if matches!(msg.payload, NetworkMessage::GetHeaders(_)) {
+                let header = BlockHeader {
+                    version: 0,
+                    prev_blockhash: BlockHash::default(),
+                    merkle_root: Default::default(),
+                    time: 0,
+                    bits: 0x01003456,
+                    nonce: 0,
+                };
+                let resp = RawNetworkMessage {
+                    magic: Network::Bitcoin.magic(),
+                    payload: NetworkMessage::Headers(vec![header]),
                 };
                 socket.write_all(&serialize(&resp)).await.unwrap();
             }

@@ -4,6 +4,13 @@ use std::io::{self, Write};
 use bitcoin::blockdata::block::BlockHeader;
 use bitcoin::consensus::encode::{deserialize, serialize};
 use bitcoin::hashes::hex::{FromHex, ToHex};
+use bitcoin::util::uint::Uint256;
+
+/// Verify that a block header satisfies its proof-of-work requirement.
+pub fn header_pow_valid(header: &BlockHeader) -> bool {
+    let hash = Uint256::from_be_bytes(header.block_hash().into_inner());
+    hash <= header.target()
+}
 
 /// Simple on-disk header store using hex encoded headers, one per line.
 pub struct HeaderStore {
@@ -53,6 +60,12 @@ impl HeaderStore {
                         "header does not connect",
                     ));
                 }
+            }
+            if !header_pow_valid(header) {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "invalid proof-of-work",
+                ));
             }
             let hex = serialize(header).to_hex();
             writeln!(file, "{}", hex)?;
