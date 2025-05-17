@@ -39,7 +39,8 @@ fn genesis_hex() -> String {
     serialize_hex(&genesis)
 }
 
-fn main() {
+#[tokio::main]
+async fn main() {
     let args: Vec<String> = std::env::args().collect();
     let opts = parse_args(&args);
     let enable_rpc = opts.enable_rpc;
@@ -59,13 +60,13 @@ fn main() {
     if let Some(addr) = peer_addr {
         println!("Connecting to {}...", addr);
         match p2p::Peer::connect(&addr) {
-            Ok(mut peer) => match peer.handshake() {
+            Ok(mut peer) => match peer.handshake().await {
                 Ok(_) => {
                     println!("Handshake with {} successful", addr);
                     let mut s = status.lock().unwrap();
                     s.peers.push(addr.clone());
                     if opts.show_height {
-                        match peer.sync_headers() {
+                        match peer.sync_headers().await {
                             Ok(h) => {
                                 s.block_height = h;
                                 println!("Current block height: {}", h);
