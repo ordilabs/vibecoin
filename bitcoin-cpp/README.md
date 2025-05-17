@@ -1,0 +1,1 @@
+This directory is intended to hold the Bitcoin Core source code (tag v29.0) as reference for the Rust reimplementation. The sources are not required to build vibecoin and may be added via git submodule or manual download.
