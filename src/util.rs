@@ -5,9 +5,11 @@ pub const CENT: i64 = 1_000_000;
 /// and comma separators. Negative amounts are supported. If `plus` is true,
 /// positive values are prefixed with `+`.
 pub fn format_money(mut n: i64, plus: bool) -> String {
-    n /= CENT;
     let negative = n < 0;
-    if negative { n = -n; }
+    if negative {
+        n = -n;
+    }
+    n /= CENT;
     let mut s = format!("{}.{:02}", n / 100, n % 100);
     let mut i = 6usize;
     while i < s.len() {
@@ -29,7 +31,9 @@ pub fn format_money(mut n: i64, plus: bool) -> String {
 /// overflow.
 pub fn parse_money(s: &str) -> Option<i64> {
     let s = s.trim();
-    if s.is_empty() { return None; }
+    if s.is_empty() {
+        return None;
+    }
     let mut chars = s.chars().peekable();
     let mut negative = false;
     if let Some(&c) = chars.peek() {
@@ -57,7 +61,9 @@ pub fn parse_money(s: &str) -> Option<i64> {
     if let Some('.') = chars.peek() {
         chars.next();
         if let Some(c1) = chars.next() {
-            if !c1.is_ascii_digit() { return None; }
+            if !c1.is_ascii_digit() {
+                return None;
+            }
             cents = 10 * (c1.to_digit(10).unwrap() as i64);
             if let Some(&c2) = chars.peek() {
                 if c2.is_ascii_digit() {
@@ -68,16 +74,28 @@ pub fn parse_money(s: &str) -> Option<i64> {
         }
     }
     while let Some(&c) = chars.peek() {
-        if !c.is_whitespace() { return None; }
+        if !c.is_whitespace() {
+            return None;
+        }
         chars.next();
     }
-    if whole.len() > 14 { return None; }
+    if whole.len() > 14 {
+        return None;
+    }
     let n_whole: i64 = whole.parse().ok()?;
     let pre = n_whole.checked_mul(100)?.checked_add(cents)?;
     let value = pre.checked_mul(CENT)?;
-    if value / CENT != pre { return None; }
-    if value / COIN != n_whole { return None; }
-    if negative { Some(-value) } else { Some(value) }
+    if value / CENT != pre {
+        return None;
+    }
+    if value / COIN != n_whole {
+        return None;
+    }
+    if negative {
+        Some(-value)
+    } else {
+        Some(value)
+    }
 }
 
 #[cfg(test)]
@@ -93,6 +111,11 @@ mod tests {
     #[test]
     fn test_format_money_commas() {
         assert_eq!(format_money(123_456_789 * COIN, false), "123,456,789.00");
+    }
+
+    #[test]
+    fn test_format_money_sub_cent_negative() {
+        assert_eq!(format_money(-50, false), "-0.00");
     }
 
     #[test]
