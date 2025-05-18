@@ -2,97 +2,175 @@ use hyper::server::conn::Http;
 use hyper::service::service_fn;
 use hyper::{Body, Request, Response, StatusCode};
 use std::convert::Infallible;
+use std::sync::{Arc, Mutex};
 use tokio::io::AsyncWriteExt;
 use tokio::net::{TcpListener, TcpStream};
 
+use crate::rpc;
+use log::{debug, error, info, warn};
+
 // Placeholder for P2P connection handling
 async fn handle_p2p_connection(mut stream: TcpStream, initial_bytes: Vec<u8>) {
-    println!(
-        "P2P connection detected. Initial bytes (first 8) len: {}",
+    let peer_addr = stream
+        .peer_addr()
+        .map_or_else(|_| "unknown_peer".to_string(), |a| a.to_string());
+    info!(
+        "[listener] P2P connection detected from {}. Initial bytes (first {}) len: {}",
+        peer_addr,
+        initial_bytes.len().min(8),
         initial_bytes.len()
     );
     // Send a simple acknowledgment to confirm this handler was called
     if let Err(e) = stream.write_all(b"P2P_ACK").await {
-        eprintln!("Failed to send P2P_ACK: {}", e);
+        warn!("[listener] Failed to send P2P_ACK to {}: {}", peer_addr, e);
     }
     // Attempt a graceful shutdown
     if let Err(e) = stream.shutdown().await {
-        eprintln!("Failed to shutdown P2P stream gracefully: {}", e);
+        warn!(
+            "[listener] Failed to shutdown P2P stream from {} gracefully: {}",
+            peer_addr, e
+        );
     }
+    debug!("[listener] P2P handler for {} finished.", peer_addr);
     // Stream is dropped when the function scope ends
 }
 
-async fn http_request_handler(req: Request<Body>) -> Result<Response<Body>, Infallible> {
+async fn http_request_handler(
+    req: Request<Body>,
+    status: Arc<Mutex<rpc::NodeStatus>>,
+) -> Result<Response<Body>, Infallible> {
+    let peer_addr_str = req
+        .extensions()
+        .get::<std::net::SocketAddr>()
+        .map_or_else(|| "unknown_peer".to_string(), |s| s.to_string());
+    info!(
+        "[listener] HTTP request from {}: {} {}",
+        peer_addr_str,
+        req.method(),
+        req.uri().path()
+    );
     match (req.method(), req.uri().path()) {
         (&hyper::Method::GET, "/status") => {
-            let body = Body::from("{\"status\": \"ok\"}");
+            let status_lock = status.lock().unwrap();
+            // Serialize the NodeStatus struct to JSON
+            match serde_json::to_string(&*status_lock) {
+                Ok(json_body) => Ok(Response::builder()
+                    .status(StatusCode::OK)
+                    .header(hyper::header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(json_body))
+                    .unwrap()),
+                Err(e) => {
+                    error!(
+                        "[listener] Error serializing status for {}: {}",
+                        peer_addr_str, e
+                    );
+                    Ok(Response::builder()
+                        .status(StatusCode::INTERNAL_SERVER_ERROR)
+                        .body(Body::from("Error serializing status"))
+                        .unwrap())
+                }
+            }
+        }
+        _ => {
+            warn!(
+                "[listener] HTTP 404 for {} {}: Path not found.",
+                req.method(),
+                req.uri().path()
+            );
             Ok(Response::builder()
-                .status(StatusCode::OK)
-                .header(hyper::header::CONTENT_TYPE, "application/json")
-                .body(body)
+                .status(StatusCode::NOT_FOUND)
+                .body("Not Found".into())
                 .unwrap())
         }
-        _ => Ok(Response::builder()
-            .status(StatusCode::NOT_FOUND)
-            .body("Not Found".into())
-            .unwrap()),
     }
 }
 
-async fn handle_http_connection(stream: TcpStream) {
-    println!("HTTP connection detected, serving with Hyper.");
+async fn handle_http_connection(stream: TcpStream, status: Arc<Mutex<rpc::NodeStatus>>) {
+    let peer_addr_for_log = stream
+        .peer_addr()
+        .map_or_else(|_| "unknown_peer".to_string(), |a| a.to_string());
+    info!(
+        "[listener] HTTP connection detected from {}, serving with Hyper.",
+        peer_addr_for_log
+    );
+
+    // Get peer_addr before stream is moved, and clone it for the closure.
+    let peer_addr_for_handler = stream.peer_addr().ok();
+
+    let service = service_fn(move |mut req: Request<Body>| {
+        // Insert the cloned peer_addr into request extensions.
+        if let Some(addr) = peer_addr_for_handler {
+            req.extensions_mut().insert(addr);
+        }
+        http_request_handler(req, Arc::clone(&status))
+    });
+
     if let Err(e) = Http::new()
         .http1_only(true)
         .http1_keep_alive(true)
-        .serve_connection(stream, service_fn(http_request_handler))
+        .serve_connection(stream, service)
         .await
     {
-        eprintln!("Error serving HTTP connection: {}", e);
+        // Differentiate between connection errors and hyper service errors if possible
+        // Some errors (like BrokenPipe) are normal if client disconnects early.
+        if e.is_incomplete_message()
+            || format!("{}", e).contains("connection reset")
+            || format!("{}", e).contains("broken pipe")
+        {
+            debug!(
+                "[listener] HTTP connection from {} ended (client disconnect?): {}",
+                peer_addr_for_log, e
+            );
+        } else {
+            error!(
+                "[listener] Error serving HTTP connection from {}: {}",
+                peer_addr_for_log, e
+            );
+        }
     }
+    debug!(
+        "[listener] HTTP connection handler for {} finished.",
+        peer_addr_for_log
+    );
 }
 
-pub async fn start_listener(addr: &str) -> std::io::Result<()> {
+pub async fn start_listener(
+    addr: &str,
+    status: Arc<Mutex<rpc::NodeStatus>>,
+) -> std::io::Result<()> {
     let listener = TcpListener::bind(addr).await?;
-    println!("Listening on: {} for P2P and HTTP/RPC", addr);
+    info!("[listener] Listening on: {} for P2P and HTTP/RPC", addr);
 
     loop {
         let (stream, peer_addr) = listener.accept().await?;
-        println!("Accepted connection from: {}", peer_addr);
+        info!("[listener] Accepted connection from: {}", peer_addr);
+        let status_clone = Arc::clone(&status);
 
-        // Important: We need a way to "give back" the peeked bytes to the stream
-        // if it's not HTTP, or ensure the P2P handler can prepend them.
-        // Tokio's `peek()` doesn't consume the bytes from the underlying stream for other readers,
-        // but our P2P handler might expect to read them itself.
-        // A more robust solution might involve a small state machine or a wrapper around the stream.
-
-        // For HTTP, hyper will read from the stream directly.
-        // For P2P, if our `p2p::Peer` expects to read the magic bytes itself,
-        // `peek()` is fine. If it expects a "fresh" stream, this is more complex.
-
-        let mut buf = [0u8; 8]; // Peek a smaller amount, just enough for HTTP method or P2P magic.
+        let mut buf = [0u8; 8];
         match stream.peek(&mut buf).await {
             Ok(n) => {
                 let peeked_bytes = &buf[..n];
-                // Basic HTTP method check
                 if n >= 4
-                    && (
-                        peeked_bytes.starts_with(b"GET ")
-                            || peeked_bytes.starts_with(b"POST")
-                            || peeked_bytes.starts_with(b"PUT ")
-                            || peeked_bytes.starts_with(b"HEAD")
-                            || peeked_bytes.starts_with(b"HTTP")
-                        // Some clients might send HTTP/1.1 directly
-                    )
+                    && (peeked_bytes.starts_with(b"GET ")
+                        || peeked_bytes.starts_with(b"POST")
+                        || peeked_bytes.starts_with(b"PUT ")
+                        || peeked_bytes.starts_with(b"HEAD")
+                        || peeked_bytes.starts_with(b"HTTP"))
                 {
+                    debug!(
+                        "[listener] Peeked {} bytes from {}, identified as HTTP.",
+                        n, peer_addr
+                    );
                     tokio::spawn(async move {
-                        handle_http_connection(stream).await;
+                        handle_http_connection(stream, status_clone).await;
                     });
                 } else {
-                    // Assume P2P and pass the peeked bytes for the handler to decide.
-                    // The P2P handler will need to be adapted to potentially use these bytes
-                    // instead of reading them again, or this peek must be non-consuming for it.
-                    // Since peek() is non-consuming from the TcpStream's perspective for other awaiters,
-                    // this should be okay if the P2P handler reads from the original stream.
+                    debug!(
+                        "[listener] Peeked {} bytes from {}, identified as P2P. First few: {:?}",
+                        n,
+                        peer_addr,
+                        &peeked_bytes[..n.min(8)]
+                    );
                     let initial_data = peeked_bytes.to_vec();
                     tokio::spawn(async move {
                         handle_p2p_connection(stream, initial_data).await;
@@ -100,11 +178,10 @@ pub async fn start_listener(addr: &str) -> std::io::Result<()> {
                 }
             }
             Err(e) => {
-                eprintln!(
-                    "Failed to peek stream from {}: {}; dropping connection",
+                warn!(
+                    "[listener] Failed to peek stream from {}: {}; dropping connection",
                     peer_addr, e
                 );
-                // stream is dropped here
             }
         }
     }
@@ -112,7 +189,9 @@ pub async fn start_listener(addr: &str) -> std::io::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::*; // Imports start_listener, handle_http_connection, etc.
+    use super::*;
+    use crate::rpc::NodeStatus;
+    use log::info;
     use std::time::Duration;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpStream;
@@ -131,11 +210,20 @@ mod tests {
         let port = find_free_port().await;
         let addr = format!("127.0.0.1:{}", port);
 
+        // Create a dummy NodeStatus for testing
+        let test_status = Arc::new(Mutex::new(NodeStatus {
+            block_height: 123,
+            peers: vec!["1.2.3.4:8333".to_string()],
+            current_best_header_hex: Some("001122aabbcc".to_string()),
+        }));
+
         // Start the listener in a background task
         let listener_addr = addr.clone();
+        let status_clone_for_listener = Arc::clone(&test_status);
         tokio::spawn(async move {
-            if let Err(e) = start_listener(&listener_addr).await {
-                eprintln!("Test listener failed: {}", e); // Use eprintln for test output
+            // Pass the dummy status to the listener
+            if let Err(e) = start_listener(&listener_addr, status_clone_for_listener).await {
+                error!("[Test Listener] Listener failed: {}", e);
             }
         });
 
@@ -158,13 +246,18 @@ mod tests {
             .expect("Failed to read /status response");
         let response_status_str = String::from_utf8_lossy(&response_status_buf);
 
-        println!("Response for /status:\n{}", response_status_str); // Debug output
+        info!(
+            "[Test Listener] Response for /status:\n{}",
+            response_status_str
+        );
 
         assert!(response_status_str.starts_with("HTTP/1.1 200 OK"));
         assert!(response_status_str.contains("content-type: application/json"));
-        assert!(response_status_str.ends_with("{\"status\": \"ok\"}"));
+        // Update expected JSON body
+        let expected_body = serde_json::to_string(&*test_status.lock().unwrap()).unwrap();
+        assert!(response_status_str.ends_with(&expected_body));
 
-        // Test a non-existent endpoint
+        // Test a non-existent endpoint (status arc doesn't matter here as much)
         let mut stream_notfound = TcpStream::connect(&addr)
             .await
             .expect("Failed to connect for /notfound");
@@ -180,7 +273,10 @@ mod tests {
             .expect("Failed to read /notfound response");
         let response_notfound_str = String::from_utf8_lossy(&response_notfound_buf);
 
-        println!("Response for /notfound:\n{}", response_notfound_str); // Debug output
+        info!(
+            "[Test Listener] Response for /notfound:\n{}",
+            response_notfound_str
+        );
 
         assert!(response_notfound_str.starts_with("HTTP/1.1 404 Not Found"));
         assert!(response_notfound_str.ends_with("Not Found"));
@@ -193,9 +289,16 @@ mod tests {
 
         // Start the listener in a background task
         let listener_addr = addr.clone();
+        // Create a default status for this test
+        let test_status_p2p = Arc::new(Mutex::new(NodeStatus {
+            block_height: 0,
+            peers: Vec::new(),
+            current_best_header_hex: None,
+        }));
         tokio::spawn(async move {
-            if let Err(e) = start_listener(&listener_addr).await {
-                eprintln!("Test P2P listener failed: {}", e);
+            if let Err(e) = start_listener(&listener_addr, test_status_p2p).await {
+                // Pass the default status
+                error!("[Test Listener] Test P2P listener failed: {}", e);
             }
         });
 
@@ -230,7 +333,7 @@ mod tests {
                 | std::io::ErrorKind::BrokenPipe
                 | std::io::ErrorKind::UnexpectedEof => {
                     // These errors also indicate the server side is done with the connection.
-                    println!("P2P connection closed with error: {:?}, considering test passed for P2P handler invocation.", e.kind());
+                    info!("[Test Listener] P2P connection closed with error: {:?}, considering test passed for P2P handler invocation.", e.kind());
                 }
                 _ => panic!("Error after P2P_ACK: {:?}", e), // Panic on other errors
             },

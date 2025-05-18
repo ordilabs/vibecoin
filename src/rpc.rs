@@ -2,11 +2,13 @@
 // use tokio::io::{AsyncReadExt, AsyncWriteExt}; // No longer needed for this file directly
 // use tokio::net::{TcpListener, TcpStream}; // No longer needed for this file directly
 // use tokio::task::{self, JoinHandle}; // No longer needed for this file directly
+use serde::Serialize; // Added for deriving Serialize
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize)] // Added Serialize
 pub struct NodeStatus {
     pub block_height: u64,
     pub peers: Vec<String>,
+    pub current_best_header_hex: Option<String>,
 }
 
 // pub async fn start( // Old RPC start, removed
