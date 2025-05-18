@@ -188,7 +188,7 @@ mod tests {
 
         let mut peer = Peer::connect(&addr.to_string()).unwrap();
         peer.handshake().await.unwrap();
-        let h = peer.sync_headers("headers.dat").await.unwrap();
+        let h = peer.sync_headers("headers.bin").await.unwrap();
         assert_eq!(h, 0);
         server.await.unwrap();
     }
@@ -298,7 +298,7 @@ mod tests {
 
         let mut peer = Peer::connect(&addr.to_string()).unwrap();
         peer.handshake().await.unwrap();
-        let h = peer.sync_headers("headers_multi.dat").await.unwrap();
+        let h = peer.sync_headers("headers_multi.bin").await.unwrap();
         assert_eq!(h, 0);
         server.await.unwrap();
     }

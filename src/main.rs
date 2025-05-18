@@ -23,7 +23,7 @@ impl Default for CliOptions {
             enable_rpc: true,
             peer_addr: None,
             show_height: false,
-            headers_path: "headers.dat".into(),
+            headers_path: "headers.bin".into(),
             rpc_addr: "127.0.0.1:8080".into(),
         }
     }
@@ -167,7 +167,7 @@ mod tests {
         assert!(opts.show_height);
         assert!(opts.peer_addr.is_none());
         assert!(opts.enable_rpc);
-        assert_eq!(opts.headers_path, "headers.dat");
+        assert_eq!(opts.headers_path, "headers.bin");
         assert_eq!(opts.rpc_addr, "127.0.0.1:8080");
     }
 
@@ -178,7 +178,7 @@ mod tests {
         assert!(opts.show_height);
         assert_eq!(opts.peer_addr, Some("127.0.0.1:8333".into()));
         assert!(opts.enable_rpc);
-        assert_eq!(opts.headers_path, "headers.dat");
+        assert_eq!(opts.headers_path, "headers.bin");
         assert_eq!(opts.rpc_addr, "127.0.0.1:8080");
     }
 
@@ -197,9 +197,9 @@ mod tests {
 
     #[test]
     fn parse_args_custom_headers_file() {
-        let args = vec!["prog".into(), "--headers-file".into(), "foo.dat".into()];
+        let args = vec!["prog".into(), "--headers-file".into(), "foo.bin".into()];
         let opts = parse_args(&args).unwrap();
-        assert_eq!(opts.headers_path, "foo.dat");
+        assert_eq!(opts.headers_path, "foo.bin");
         assert_eq!(opts.rpc_addr, "127.0.0.1:8080");
     }
 

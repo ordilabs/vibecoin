@@ -1,11 +1,10 @@
 use std::fs::{self, OpenOptions};
-use std::io::{self, Write};
+use std::io::{self, Read, Write};
 
 use bitcoin::blockdata::block::Header as BlockHeader;
-use bitcoin::consensus::encode::{deserialize, serialize_hex};
-use bitcoin::hex::FromHex;
+use bitcoin::consensus::encode::{deserialize, serialize};
 
-/// Simple on-disk header store using hex encoded headers, one per line.
+/// Simple on-disk header store using length-prefixed binary headers.
 pub struct HeaderStore {
     path: String,
     headers: Vec<BlockHeader>,
@@ -15,13 +14,22 @@ impl HeaderStore {
     /// Load headers from the given file, if it exists.
     pub fn open(path: &str) -> io::Result<Self> {
         let mut headers = Vec::new();
-        if let Ok(data) = fs::read_to_string(path) {
-            for line in data.lines() {
-                let bytes = Vec::from_hex(line)
-                    .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))?;
-                let header: BlockHeader = deserialize(&bytes)
-                    .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))?;
-                headers.push(header);
+        if let Ok(mut data) = fs::File::open(path) {
+            let mut len_buf = [0u8; 4];
+            loop {
+                match data.read_exact(&mut len_buf) {
+                    Ok(()) => {
+                        let len = u32::from_le_bytes(len_buf) as usize;
+                        let mut buf = vec![0u8; len];
+                        data.read_exact(&mut buf)?;
+                        let header: BlockHeader = deserialize(&buf).map_err(|e| {
+                            io::Error::new(io::ErrorKind::InvalidData, e.to_string())
+                        })?;
+                        headers.push(header);
+                    }
+                    Err(ref e) if e.kind() == io::ErrorKind::UnexpectedEof => break,
+                    Err(e) => return Err(e),
+                }
             }
         }
         Ok(HeaderStore {
@@ -58,8 +66,10 @@ impl HeaderStore {
             if let Err(e) = header.validate_pow(header.target()) {
                 return Err(io::Error::new(io::ErrorKind::InvalidData, e.to_string()));
             }
-            let hex = serialize_hex(header);
-            writeln!(file, "{}", hex)?;
+            let bytes = serialize(header);
+            let len = bytes.len() as u32;
+            file.write_all(&len.to_le_bytes())?;
+            file.write_all(&bytes)?;
             self.headers.push(header.clone());
         }
         Ok(())
@@ -84,7 +94,7 @@ mod tests {
 
     fn temp_file() -> String {
         let dir = std::env::temp_dir();
-        let name = format!("test_headers_{}.dat", rand::random::<u64>());
+        let name = format!("test_headers_{}.bin", rand::random::<u64>());
         dir.join(name).to_str().unwrap().to_string()
     }
 
