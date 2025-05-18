@@ -89,7 +89,7 @@ async fn main() {
         peers: Vec::new(),
     }));
     let _rpc_handle = if enable_rpc {
-        match rpc::start(&opts.rpc_addr, Arc::clone(&status)) {
+        match rpc::start(&opts.rpc_addr, Arc::clone(&status)).await {
             Ok(h) => Some(h),
             Err(e) => {
                 eprintln!("Failed to start RPC server: {}", e);
