@@ -1,6 +1,7 @@
 use bitcoin::blockdata::constants::genesis_block;
 use bitcoin::consensus::encode::serialize_hex;
 use bitcoin::Network;
+use clap::{ArgAction, Parser};
 use std::sync::{Arc, Mutex};
 mod base58;
 mod p2p;
@@ -8,62 +9,30 @@ mod rpc;
 mod storage;
 mod util;
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Parser)]
 struct CliOptions {
+    /// Disable the RPC server
+    #[arg(long = "no-rpc", action = ArgAction::SetFalse, default_value_t = true)]
     enable_rpc: bool,
+
+    /// Address of peer to connect to
     peer_addr: Option<String>,
+
+    /// Display current block height
+    #[arg(long)]
     show_height: bool,
+
+    /// Path to the headers file
+    #[arg(long = "headers-file", default_value = "headers.bin")]
     headers_path: String,
+
+    /// Address to bind the RPC server
+    #[arg(long = "rpc-addr", default_value = "127.0.0.1:8080")]
     rpc_addr: String,
 }
 
-impl Default for CliOptions {
-    fn default() -> Self {
-        CliOptions {
-            enable_rpc: true,
-            peer_addr: None,
-            show_height: false,
-            headers_path: "headers.bin".into(),
-            rpc_addr: "127.0.0.1:8080".into(),
-        }
-    }
-}
-
-fn usage(prog: &str) -> String {
-    format!(
-        "Usage: {prog} [--no-rpc] [--rpc-addr <addr>] [--height] [--headers-file <path>] [peer_addr]\n    -h, --help    Show this message",
-        prog = prog
-    )
-}
-
 fn parse_args(args: &[String]) -> Result<CliOptions, String> {
-    let mut opts = CliOptions::default();
-    let mut i = 1;
-    while i < args.len() {
-        match args[i].as_str() {
-            "--no-rpc" => opts.enable_rpc = false,
-            "--height" => opts.show_height = true,
-            "--rpc-addr" => {
-                i += 1;
-                if i >= args.len() {
-                    return Err(usage(&args[0]));
-                }
-                opts.rpc_addr = args[i].clone();
-            }
-            "--headers-file" => {
-                i += 1;
-                if i >= args.len() {
-                    return Err(usage(&args[0]));
-                }
-                opts.headers_path = args[i].clone();
-            }
-            "-h" | "--help" => return Err(usage(&args[0])),
-            opt if opt.starts_with('-') => return Err(usage(&args[0])),
-            addr => opts.peer_addr = Some(addr.to_string()),
-        }
-        i += 1;
-    }
-    Ok(opts)
+    CliOptions::try_parse_from(args).map_err(|e| e.to_string())
 }
 
 fn genesis_hex() -> String {
