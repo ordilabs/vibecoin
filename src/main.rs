@@ -1,5 +1,3 @@
-use bitcoin::blockdata::constants::genesis_block;
-use bitcoin::consensus::encode::serialize_hex;
 use bitcoin::Network;
 use clap::{ArgAction, Parser, ValueEnum};
 use std::fs;
@@ -11,6 +9,8 @@ mod p2p;
 mod rpc;
 mod storage;
 // mod util; // Removed as it's unused
+
+use log::{error, info}; // Removed warn
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, ValueEnum)]
 enum BitcoinNetworkCli {
@@ -33,10 +33,6 @@ struct CliOptions {
     #[arg(long = "connect")]
     connect: Option<String>,
 
-    /// Display current block height
-    #[arg(long = "height")]
-    show_height: bool,
-
     /// Path to the headers file (overrides default in data directory)
     #[arg(long = "headers-file")]
     headers_path_override: Option<String>,
@@ -46,7 +42,7 @@ struct CliOptions {
     datadir_override: Option<String>,
 
     /// Address to bind the listener for P2P and RPC/HTTP
-    #[arg(long = "listen-addr", default_value = "0.0.0.0:8334")]
+    #[arg(long = "listen-addr", default_value = "0.0.0.0:8335")]
     listen_addr: String,
 
     /// Disable the RPC server (currently integrated with unified listener)
@@ -89,25 +85,22 @@ fn get_default_p2p_port(network: Network) -> u16 {
     }
 }
 
-fn genesis_hex(network: Network) -> String {
-    let genesis = genesis_block(network);
-    serialize_hex(&genesis)
-}
-
 #[tokio::main]
 async fn main() {
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
+
     let args: Vec<String> = std::env::args().collect();
     let opts = match parse_args(&args) {
         Ok(o) => o,
         Err(msg) => {
-            eprintln!("{}", msg);
+            error!("{}", msg);
             std::process::exit(1);
         }
     };
 
     let cli_network = opts.network;
     let network = to_bitcoin_network(cli_network);
-    println!(
+    info!(
         "Selected network: {:?} (using bitcoin::Network::{})",
         cli_network, network
     );
@@ -119,24 +112,24 @@ async fn main() {
 
     if !datadir.exists() {
         fs::create_dir_all(&datadir).expect("Failed to create data directory");
-        println!("Created data directory: {}", datadir.display());
+        info!("Created data directory: {}", datadir.display());
     }
 
     let headers_path = match opts.headers_path_override {
         Some(path_str) => PathBuf::from(path_str),
         None => datadir.join("headers.bin"),
     };
-    println!("Using headers file: {}", headers_path.display());
+    info!("Using headers file: {}", headers_path.display());
 
     let mut peer_addr_processed = opts.connect.clone();
     if let Some(addr_str) = &mut peer_addr_processed {
         if addr_str == "0" {
             peer_addr_processed = None; // Disable connection if --connect=0
-            println!("--connect=0 specified, disabling automatic outbound connection.");
+            info!("--connect=0 specified, disabling automatic outbound connection.");
         } else if !addr_str.contains(':') {
             let port = get_default_p2p_port(network);
             addr_str.push_str(&format!(":{}", port));
-            println!(
+            info!(
                 "Peer address amended with default port for {}: {}",
                 network, addr_str
             );
@@ -146,78 +139,121 @@ async fn main() {
     let status = Arc::new(Mutex::new(rpc::NodeStatus {
         block_height: 0,
         peers: Vec::new(),
+        current_best_header_hex: None,
     }));
 
     let listen_addr_clone = opts.listen_addr.clone();
+    let status_clone_for_listener = Arc::clone(&status);
     tokio::spawn(async move {
-        if let Err(e) = listener::start_listener(&listen_addr_clone).await {
-            eprintln!("Listener failed: {}", e);
+        if let Err(e) =
+            listener::start_listener(&listen_addr_clone, status_clone_for_listener).await
+        {
+            error!("Listener failed: {}", e);
         }
     });
 
     if let Some(addr) = peer_addr_processed {
-        println!(
+        info!(
             "Attempting to connect to peer: {} on network {}",
             addr, network
         );
-        let headers_path_str = headers_path
-            .to_str()
-            .expect("Headers path is not valid UTF-8");
+        let headers_path_for_peer = headers_path.clone();
+        let status_for_peer_connection = Arc::clone(&status); // Cloned status for this peer connection task.
+        let network_for_peer = network;
 
-        match p2p::Peer::connect(&addr, network) {
-            Ok(mut peer) => {
-                println!("Connected. Performing handshake...");
-                match peer.handshake().await {
-                    Ok(_) => {
-                        println!("Handshake with {} successful", addr);
-                        {
-                            let mut s = status.lock().unwrap();
+        tokio::spawn(async move {
+            match p2p::Peer::connect(&addr, network_for_peer).await {
+                Ok(peer) => {
+                    info!(
+                        "Successfully connected to {}. Spawning continuous sync task (handshake will be done by task).",
+                        addr
+                    );
+                    let status_for_sync_handler = Arc::clone(&status_for_peer_connection);
+                    {
+                        let mut s = status_for_sync_handler.lock().unwrap();
+                        if !s.peers.contains(&addr) {
                             s.peers.push(addr.clone());
                         }
-                        if opts.show_height {
-                            println!("Attempting to sync headers from {}...", addr);
-                            match peer.sync_headers(headers_path_str).await {
-                                Ok(h) => {
-                                    let mut s_lock = status.lock().unwrap();
-                                    s_lock.block_height = h;
-                                    println!("Current block height after sync: {}", h);
-                                }
-                                Err(e) => eprintln!("Header sync failed: {}", e),
-                            }
-                        }
                     }
-                    Err(e) => eprintln!("Handshake failed: {}", e),
+                    if let Err(e) = peer
+                        .maintain_connection_and_sync_headers(
+                            headers_path_for_peer.to_string_lossy().into_owned(),
+                            status_for_sync_handler,
+                            network_for_peer,
+                        )
+                        .await
+                    {
+                        error!(
+                            "[main] Continuous sync handler for {} exited with error: {}",
+                            addr, e
+                        );
+                    } else {
+                        info!("[main] Continuous sync handler for {} finished.", addr);
+                    }
+                }
+                Err(e) => {
+                    error!(
+                        "[main] Failed to connect to peer {}: {}. Ensure the peer is running and accessible.",
+                        addr, e
+                    );
                 }
             }
-            Err(e) => eprintln!("Connection error: {}", e),
-        }
+            // After the peer task finishes (due to error or completion), remove the peer from the list.
+            // This part might need more robust logic for handling reconnects or distinguishing expected vs. unexpected exits.
+            info!(
+                "[main] Peer task for {} concluded. Removing from active peer list.",
+                addr
+            );
+            let mut s = status_for_peer_connection.lock().unwrap();
+            s.peers.retain(|p| p != &addr);
+            // Potentially also update block_height or current_best_header_hex if the node is shutting down
+            // or if this peer was the sole source of truth for a while, though this is complex.
+            // For now, just removing the peer is sufficient.
+        });
     } else {
-        println!(
-            "No peer address provided for network: {}. Displaying Genesis.",
-            network
-        );
-        let hex = genesis_hex(network);
-        println!("Bitcoin genesis block:\n{}", hex);
-        if opts.show_height {
-            let h = status.lock().unwrap().block_height;
-            println!("Current block height (from local status): {}", h);
-        }
+        info!("No specific peer to connect to provided via --connect. Node will only listen for incoming connections.");
     }
 
-    if opts.connect.is_none() || opts.connect == Some("0".to_string()) {
-        println!(
-            "Running in listener-only mode (no peer connection initiated from CLI or --connect=0)."
-        );
-        tokio::signal::ctrl_c()
-            .await
-            .expect("Failed to listen for ctrl-c");
-        println!("Ctrl-C received, shutting down.");
+    // Keep the main thread alive, print status periodically, and listen for Ctrl-C for graceful shutdown.
+    info!(
+        "Node is running. Listener active on {}. Press Ctrl-C to stop.",
+        opts.listen_addr
+    );
+
+    let mut ctr = 0;
+    loop {
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => {
+                info!("Ctrl-C received, shutting down.");
+                break;
+            }
+            _ = tokio::time::sleep(tokio::time::Duration::from_secs(60)) => {
+                let status_snapshot = status.lock().unwrap();
+                info!(
+                    "[Heartbeat {}] Current block height: {}, Peers: {:?}, Best Header: {}",
+                    ctr,
+                    status_snapshot.block_height,
+                    status_snapshot.peers,
+                    status_snapshot.current_best_header_hex.as_deref().unwrap_or("N/A")
+                );
+                ctr += 1;
+            }
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bitcoin::blockdata::constants::genesis_block;
+    use bitcoin::consensus::encode::serialize_hex;
+    use bitcoin::Network;
+
+    // Helper function for tests that need genesis hex - this was the original genesis_hex
+    fn get_genesis_hex_for_test(network: Network) -> String {
+        let genesis = genesis_block(network);
+        serialize_hex(&genesis)
+    }
 
     #[test]
     fn parse_args_default_network() {
@@ -251,9 +287,9 @@ mod tests {
 
     #[test]
     fn genesis_hex_matches_known_value() {
-        let hex_bitcoin = genesis_hex(Network::Bitcoin);
-        assert!(hex_bitcoin.starts_with("01000000"));
-        let hex_regtest = genesis_hex(Network::Regtest);
+        let hex_bitcoin = get_genesis_hex_for_test(Network::Bitcoin);
+        assert!(hex_bitcoin.starts_with("01000000")); // Minimal check, used to be full hex
+        let hex_regtest = get_genesis_hex_for_test(Network::Regtest);
         assert!(hex_regtest.starts_with("01000000"));
     }
 
@@ -264,6 +300,11 @@ mod tests {
             genesis.block_hash().to_string(),
             "000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f"
         );
+        let genesis_regtest = genesis_block(Network::Regtest);
+        assert_eq!(
+            genesis_regtest.block_hash().to_string(),
+            "0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206"
+        );
     }
 
     #[test]
@@ -273,29 +314,11 @@ mod tests {
             genesis.header.merkle_root.to_string(),
             "4a5e1e4baab89f3a32518a88c31bc87f618f76673e2cc77ab2127b7afdeda33b"
         );
-    }
-
-    #[test]
-    fn parse_args_height_flag() {
-        let args: Vec<String> = vec!["prog".into(), "--height".into()];
-        let opts = parse_args(&args).unwrap();
-        assert!(opts.show_height);
-        assert!(opts.connect.is_none());
-        assert!(opts.headers_path_override.is_none());
-    }
-
-    #[test]
-    fn parse_args_peer_and_height() {
-        let args: Vec<String> = vec![
-            "prog".into(),
-            "--height".into(),
-            "--connect".into(),
-            "127.0.0.1:8333".into(),
-        ];
-        let opts = parse_args(&args).unwrap();
-        assert!(opts.show_height);
-        assert_eq!(opts.connect, Some("127.0.0.1:8333".into()));
-        assert!(opts.headers_path_override.is_none());
+        let genesis_regtest = genesis_block(Network::Regtest);
+        assert_eq!(
+            genesis_regtest.header.merkle_root.to_string(),
+            "4a5e1e4baab89f3a32518a88c31bc87f618f76673e2cc77ab2127b7afdeda33b" // Regtest genesis also uses this merkle root
+        );
     }
 
     #[test]
@@ -303,9 +326,15 @@ mod tests {
         let args: Vec<String> = vec!["prog".into(), "--connect".into(), "0".into()];
         let opts = parse_args(&args).unwrap();
         assert_eq!(opts.connect, Some("0".to_string()));
-        // The main logic will then set peer_addr_processed to None based on this.
-        // We can't directly test peer_addr_processed here as it's a local var in main,
-        // but we verify the argument is parsed correctly.
+        // Main logic will interpret this as None for peer_addr_processed
+
+        let mut peer_addr_processed = opts.connect.clone();
+        if let Some(addr_str) = &mut peer_addr_processed {
+            if addr_str == "0" {
+                peer_addr_processed = None;
+            }
+        }
+        assert_eq!(peer_addr_processed, None);
     }
 
     #[test]
