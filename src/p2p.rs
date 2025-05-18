@@ -216,7 +216,7 @@ impl Peer {
         let path_str = "./data/headers_p2p_placeholder.dat"; // Example path, should align with Peer's construction
         let path = Path::new(path_str);
         let store = HeaderStore::open(path, self.network)?;
-        Ok(store.height()?)
+        store.height()
     }
 }
 

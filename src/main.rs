@@ -10,7 +10,7 @@ mod listener;
 mod p2p;
 mod rpc;
 mod storage;
-mod util;
+// mod util; // Removed as it's unused
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, ValueEnum)]
 enum BitcoinNetworkCli {

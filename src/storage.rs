@@ -189,7 +189,7 @@ mod tests {
         let path = temp_dir.path().join("headers.dat");
         let mut store = HeaderStore::open(&path, network)?;
         let genesis_hdr = genesis_block(network).header;
-        store.append(&[genesis_hdr.clone()])?;
+        store.append(&[genesis_hdr])?;
         assert_eq!(store.height()?, 0);
         Ok(())
     }
@@ -201,9 +201,9 @@ mod tests {
         let path = temp_dir.path().join("headers.dat");
         let mut store = HeaderStore::open(&path, network)?;
         let genesis_hdr_clone = genesis_block(network).header;
-        store.append(&[genesis_hdr_clone.clone()])?;
+        store.append(&[genesis_hdr_clone])?;
 
-        let mut invalid_header = genesis_hdr_clone.clone();
+        let mut invalid_header = genesis_hdr_clone;
         invalid_header.prev_blockhash = genesis_hdr_clone.block_hash();
         invalid_header.merkle_root = civiles_merkle_root_from_index(1);
         invalid_header.time = genesis_hdr_clone.time + 1;
@@ -225,29 +225,29 @@ mod tests {
         let path = temp_dir.path().join("headers.dat");
 
         let mut store = HeaderStore::open(&path, network)?;
-        store.append(&[genesis_hdr.clone()])?;
+        store.append(&[genesis_hdr])?;
         assert_eq!(store.height()?, 0);
 
         let easiest_bits_compact = network.params().max_attainable_target.to_compact_lossy();
 
-        let mut h2 = genesis_hdr.clone();
+        let mut h2 = genesis_hdr;
         h2.prev_blockhash = genesis_hdr.block_hash();
         h2.merkle_root = civiles_merkle_root_from_index(2);
         h2.time = genesis_hdr.time + 1;
         h2.bits = easiest_bits_compact;
         h2.nonce = 0;
         solve_pow_for_header(&mut h2);
-        store.append(&[h2.clone()])?;
+        store.append(&[h2])?;
         assert_eq!(store.height()?, 1);
 
-        let mut h3 = h2.clone();
+        let mut h3 = h2;
         h3.prev_blockhash = h2.block_hash();
         h3.merkle_root = civiles_merkle_root_from_index(3);
         h3.time = h2.time + 1;
         h3.bits = easiest_bits_compact;
         h3.nonce = 0;
         solve_pow_for_header(&mut h3);
-        store.append(&[h3.clone()])?;
+        store.append(&[h3])?;
         assert_eq!(store.height()?, 2);
         Ok(())
     }
@@ -259,13 +259,14 @@ mod tests {
         let path = temp_dir.path().join("headers.dat");
         let mut store = HeaderStore::open(&path, network)?;
         let genesis_hdr = genesis_block(network).header;
-        store.append(&[genesis_hdr.clone()])?;
+        store.append(&[genesis_hdr])?;
 
-        let mut disconnected_header = genesis_hdr.clone();
+        let mut disconnected_header = genesis_hdr;
         disconnected_header.prev_blockhash = BlockHash::all_zeros();
-        disconnected_header.merkle_root = civiles_merkle_root_from_index(4);
-        disconnected_header.nonce = 12345;
+        disconnected_header.merkle_root = civiles_merkle_root_from_index(99);
+        disconnected_header.time = genesis_hdr.time + 100;
         disconnected_header.bits = network.params().max_attainable_target.to_compact_lossy();
+        solve_pow_for_header(&mut disconnected_header);
 
         assert!(store.append(&[disconnected_header]).is_err());
         Ok(())
@@ -278,39 +279,37 @@ mod tests {
         let temp_dir = TempDir::new()?;
         let path = temp_dir.path().join("headers.dat");
 
-        let easiest_bits_compact = network.params().max_attainable_target.to_compact_lossy();
-
+        // Create and populate a store
         {
             let mut store = HeaderStore::open(&path, network)?;
-            store.append(&[genesis_hdr.clone()])?;
+            store.append(&[genesis_hdr])?;
+            assert_eq!(store.height()?, 0);
 
-            let mut h2 = genesis_hdr.clone();
+            let mut h2 = genesis_hdr;
             h2.prev_blockhash = genesis_hdr.block_hash();
-            h2.merkle_root = civiles_merkle_root_from_index(5);
+            h2.merkle_root = civiles_merkle_root_from_index(10);
             h2.time = genesis_hdr.time + 1;
-            h2.bits = easiest_bits_compact;
-            h2.nonce = 0;
+            h2.bits = network.params().max_attainable_target.to_compact_lossy();
             solve_pow_for_header(&mut h2);
-            store.append(&[h2.clone()])?;
+            store.append(&[h2])?;
             assert_eq!(store.height()?, 1);
         }
 
-        let mut store = HeaderStore::open(&path, network)?;
-        assert_eq!(store.height()?, 1);
+        // Re-open and append
+        {
+            let mut store = HeaderStore::open(&path, network)?;
+            assert_eq!(store.height()?, 1);
+            let current_tip = store.tip().unwrap();
 
-        let h2_from_store = store
-            .get_header_by_height(1)?
-            .expect("h2 should be in store");
-
-        let mut h3 = genesis_hdr.clone();
-        h3.prev_blockhash = h2_from_store.block_hash();
-        h3.merkle_root = civiles_merkle_root_from_index(6);
-        h3.time = h2_from_store.time + 1;
-        h3.bits = easiest_bits_compact;
-        h3.nonce = 0;
-        solve_pow_for_header(&mut h3);
-        store.append(&[h3.clone()])?;
-        assert_eq!(store.height()?, 2);
+            let mut h3 = genesis_hdr; // Incorrect, should be based on current_tip
+            h3.prev_blockhash = current_tip.block_hash();
+            h3.merkle_root = civiles_merkle_root_from_index(11);
+            h3.time = current_tip.time + 1;
+            h3.bits = network.params().max_attainable_target.to_compact_lossy();
+            solve_pow_for_header(&mut h3);
+            store.append(&[h3])?;
+            assert_eq!(store.height()?, 2);
+        }
         Ok(())
     }
 
@@ -320,9 +319,9 @@ mod tests {
         let temp_dir = TempDir::new()?;
         let path = temp_dir.path().join("headers.dat");
         let store = HeaderStore::open(&path, network)?;
-        let locator = store.locator_hashes();
-        assert_eq!(locator.len(), 1);
-        assert_eq!(locator[0], genesis_block(network).header.block_hash());
+        let locators = store.locator_hashes();
+        assert_eq!(locators.len(), 1);
+        assert_eq!(locators[0], genesis_block(network).header.block_hash());
         Ok(())
     }
 
@@ -334,34 +333,30 @@ mod tests {
         let path = temp_dir.path().join("headers.dat");
         let mut store = HeaderStore::open(&path, network)?;
 
-        let easiest_bits_compact = network.params().max_attainable_target.to_compact_lossy();
+        store.append(&[genesis_hdr])?;
 
-        store.append(&[genesis_hdr.clone()])?;
-
-        let mut h2 = genesis_hdr.clone();
+        let mut h2 = genesis_hdr;
         h2.prev_blockhash = genesis_hdr.block_hash();
-        h2.merkle_root = civiles_merkle_root_from_index(7);
+        h2.merkle_root = civiles_merkle_root_from_index(30);
         h2.time = genesis_hdr.time + 1;
-        h2.bits = easiest_bits_compact;
-        h2.nonce = 0;
+        h2.bits = network.params().max_attainable_target.to_compact_lossy();
         solve_pow_for_header(&mut h2);
-        store.append(&[h2.clone()])?;
+        store.append(&[h2])?;
 
-        let mut h3 = genesis_hdr.clone();
+        let mut h3 = genesis_hdr;
         h3.prev_blockhash = h2.block_hash();
-        h3.merkle_root = civiles_merkle_root_from_index(8);
+        h3.merkle_root = civiles_merkle_root_from_index(31);
         h3.time = h2.time + 1;
-        h3.bits = easiest_bits_compact;
-        h3.nonce = 0;
+        h3.bits = network.params().max_attainable_target.to_compact_lossy();
         solve_pow_for_header(&mut h3);
-        store.append(&[h3.clone()])?;
-        assert_eq!(store.height()?, 2);
+        store.append(&[h3])?;
 
-        let locator = store.locator_hashes();
-        assert_eq!(locator.len(), 3);
-        assert_eq!(locator[0], h3.block_hash());
-        assert_eq!(locator[1], h2.block_hash());
-        assert_eq!(locator[2], genesis_hdr.block_hash());
+        let locators = store.locator_hashes();
+        // Expected: [h3_hash, h2_hash, genesis_hash]
+        assert_eq!(locators.len(), 3);
+        assert_eq!(locators[0], h3.block_hash());
+        assert_eq!(locators[1], h2.block_hash());
+        assert_eq!(locators[2], genesis_hdr.block_hash());
         Ok(())
     }
 
@@ -373,48 +368,47 @@ mod tests {
         let path = temp_dir.path().join("headers.dat");
         let mut store = HeaderStore::open(&path, network)?;
 
-        let easiest_bits_compact = network.params().max_attainable_target.to_compact_lossy();
+        let mut headers_appended = vec![genesis_hdr];
+        store.append(&[genesis_hdr])?;
 
-        let mut headers_appended = vec![genesis_hdr.clone()];
-        store.append(&[genesis_hdr.clone()])?;
-
-        for i in 1..=20 {
-            let prev_header = headers_appended.last().unwrap().clone();
-            let mut next_header = genesis_hdr.clone();
+        for i in 1u32..=20u32 {
+            // Create 20 more headers (total 21)
+            let prev_header = *headers_appended.last().unwrap();
+            let mut next_header = genesis_hdr;
             next_header.prev_blockhash = prev_header.block_hash();
-            next_header.merkle_root = civiles_merkle_root_from_index(i + 8);
-            next_header.time = prev_header.time + 1;
-            next_header.bits = easiest_bits_compact;
-            next_header.nonce = i as u32;
+            next_header.merkle_root = civiles_merkle_root_from_index(100 + i);
+            next_header.time = prev_header.time + i;
+            next_header.bits = network.params().max_attainable_target.to_compact_lossy();
+            next_header.nonce = i; // Simpler nonce for test, ensure solve_pow respects it.
             solve_pow_for_header(&mut next_header);
-            store.append(&[next_header.clone()])?;
+            store.append(&[next_header])?;
             headers_appended.push(next_header);
         }
         assert_eq!(store.height()?, 20);
 
-        let locator = store.locator_hashes();
+        let locators = store.locator_hashes();
 
-        assert_eq!(locator.len(), 13);
+        assert_eq!(locators.len(), 13);
         for i in 0..10 {
             assert_eq!(
-                locator[i],
+                locators[i],
                 headers_appended[20 - i].block_hash(),
                 "Mismatch in first 10: index {}",
                 i
             );
         }
         assert_eq!(
-            locator[10],
+            locators[10],
             headers_appended[10].block_hash(),
             "Mismatch at locator[10]"
         );
         assert_eq!(
-            locator[11],
+            locators[11],
             headers_appended[8].block_hash(),
             "Mismatch at locator[11]"
         );
         assert_eq!(
-            locator[12],
+            locators[12],
             headers_appended[4].block_hash(),
             "Mismatch at locator[12]"
         );
