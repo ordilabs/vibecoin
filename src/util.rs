@@ -1,15 +1,19 @@
-pub const COIN: i64 = 100_000_000;
-pub const CENT: i64 = 1_000_000;
+// TODO: These utility constants and functions are currently unused. Integrate or remove if not needed for planned features.
+
+// pub const COIN: i64 = 100_000_000;
+pub const _COIN: i64 = 100_000_000;
+// pub const CENT: i64 = 1_000_000;
+pub const _CENT: i64 = 1_000_000;
 
 /// Format satoshi amounts into a human readable string with two decimal places
 /// and comma separators. Negative amounts are supported. If `plus` is true,
 /// positive values are prefixed with `+`.
-pub fn format_money(mut n: i64, plus: bool) -> String {
+pub fn _format_money(mut n: i64, plus: bool) -> String {
     let negative = n < 0;
     if negative {
         n = -n;
     }
-    n /= CENT;
+    n /= _CENT;
     let mut s = format!("{}.{:02}", n / 100, n % 100);
     let mut i = 6usize;
     while i < s.len() {
@@ -29,7 +33,7 @@ pub fn format_money(mut n: i64, plus: bool) -> String {
 /// Parse a decimal string into a satoshi amount. Commas are ignored and up to
 /// two fractional digits are supported. Returns `None` on parse failure or
 /// overflow.
-pub fn parse_money(s: &str) -> Option<i64> {
+pub fn _parse_money(s: &str) -> Option<i64> {
     let s = s.trim();
     if s.is_empty() {
         return None;
@@ -84,11 +88,11 @@ pub fn parse_money(s: &str) -> Option<i64> {
     }
     let n_whole: i64 = whole.parse().ok()?;
     let pre = n_whole.checked_mul(100)?.checked_add(cents)?;
-    let value = pre.checked_mul(CENT)?;
-    if value / CENT != pre {
+    let value = pre.checked_mul(_CENT)?;
+    if value / _CENT != pre {
         return None;
     }
-    if value / COIN != n_whole {
+    if value / _COIN != n_whole {
         return None;
     }
     if negative {
@@ -104,47 +108,47 @@ mod tests {
 
     #[test]
     fn test_format_money_simple() {
-        assert_eq!(format_money(COIN, false), "1.00");
-        assert_eq!(format_money(-COIN, false), "-1.00");
+        assert_eq!(_format_money(_COIN, false), "1.00");
+        assert_eq!(_format_money(-_COIN, false), "-1.00");
     }
 
     #[test]
     fn test_format_money_commas() {
-        assert_eq!(format_money(123_456_789 * COIN, false), "123,456,789.00");
+        assert_eq!(_format_money(123_456_789 * _COIN, false), "123,456,789.00");
     }
 
     #[test]
     fn test_format_money_sub_cent_negative() {
-        assert_eq!(format_money(-50, false), "-0.00");
+        assert_eq!(_format_money(-50, false), "-0.00");
     }
 
     #[test]
     fn test_parse_money() {
-        assert_eq!(parse_money("1.00"), Some(COIN));
-        assert_eq!(parse_money("+1.00"), Some(COIN));
-        assert_eq!(parse_money("-1.00"), Some(-COIN));
-        assert_eq!(parse_money("0.01"), Some(CENT));
-        assert_eq!(parse_money("123,456,789.00"), Some(123_456_789 * COIN));
-        assert_eq!(parse_money("bogus"), None);
+        assert_eq!(_parse_money("1.00"), Some(_COIN));
+        assert_eq!(_parse_money("+1.00"), Some(_COIN));
+        assert_eq!(_parse_money("-1.00"), Some(-_COIN));
+        assert_eq!(_parse_money("0.01"), Some(_CENT));
+        assert_eq!(_parse_money("123,456,789.00"), Some(123_456_789 * _COIN));
+        assert_eq!(_parse_money("bogus"), None);
     }
 
     #[test]
     fn test_parse_money_max_value() {
         assert_eq!(
-            parse_money("92,233,720,368.54"),
+            _parse_money("92,233,720,368.54"),
             Some(9_223_372_036_854_000_000)
         );
     }
 
     #[test]
     fn test_parse_money_invalid_commas() {
-        assert_eq!(parse_money("1,234.5,6"), None);
-        assert_eq!(parse_money("1.2,3"), None);
+        assert_eq!(_parse_money("1,234.5,6"), None);
+        assert_eq!(_parse_money("1.2,3"), None);
     }
 
     #[test]
     fn test_parse_money_overflow() {
-        assert_eq!(parse_money("92,233,720,368.55"), None);
-        assert_eq!(parse_money("10,000,000,000,000.00"), None);
+        assert_eq!(_parse_money("92,233,720,368.55"), None);
+        assert_eq!(_parse_money("10,000,000,000,000.00"), None);
     }
 }

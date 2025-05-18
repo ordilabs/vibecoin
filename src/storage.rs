@@ -3,16 +3,18 @@ use std::io::{self, Read, Write};
 
 use bitcoin::blockdata::block::Header as BlockHeader;
 use bitcoin::consensus::encode::{deserialize, serialize};
+use bitcoin::Network;
 
 /// Simple on-disk header store using length-prefixed binary headers.
 pub struct HeaderStore {
     path: String,
     headers: Vec<BlockHeader>,
+    network: Network,
 }
 
 impl HeaderStore {
     /// Load headers from the given file, if it exists.
-    pub fn open(path: &str) -> io::Result<Self> {
+    pub fn open(path: &str, network: Network) -> io::Result<Self> {
         let mut headers = Vec::new();
         if let Ok(mut data) = fs::File::open(path) {
             let mut len_buf = [0u8; 4];
@@ -35,6 +37,7 @@ impl HeaderStore {
         Ok(HeaderStore {
             path: path.to_string(),
             headers,
+            network,
         })
     }
 
@@ -43,8 +46,9 @@ impl HeaderStore {
         self.headers.len() as u64
     }
 
+    // TODO: This method is currently unused. Integrate or remove if not needed for planned features.
     /// Return the latest header if available.
-    pub fn tip(&self) -> Option<&BlockHeader> {
+    pub fn _tip(&self) -> Option<&BlockHeader> {
         self.headers.last()
     }
 
@@ -77,12 +81,18 @@ impl HeaderStore {
 
     /// Build a locator list for getheaders messages.
     pub fn locator_hashes(&self) -> Vec<bitcoin::BlockHash> {
-        self.headers
-            .iter()
-            .rev()
-            .take(10)
-            .map(|h| h.block_hash())
-            .collect()
+        if self.headers.is_empty() {
+            // If the store is empty, start with the genesis block of the current network
+            use bitcoin::blockdata::constants::genesis_block;
+            vec![genesis_block(self.network).block_hash()]
+        } else {
+            self.headers
+                .iter()
+                .rev()
+                .take(10)
+                .map(|h| h.block_hash())
+                .collect()
+        }
     }
 }
 
@@ -91,6 +101,10 @@ mod tests {
     use super::*;
     use bitcoin::blockdata::constants::genesis_block;
     use bitcoin::Network;
+
+    fn test_network() -> Network {
+        Network::Regtest
+    }
 
     fn temp_file() -> String {
         let dir = std::env::temp_dir();
@@ -101,8 +115,9 @@ mod tests {
     #[test]
     fn append_valid_header() {
         let path = temp_file();
-        let mut store = HeaderStore::open(&path).unwrap();
-        let genesis = genesis_block(Network::Bitcoin);
+        let network = test_network();
+        let mut store = HeaderStore::open(&path, network).unwrap();
+        let genesis = genesis_block(network);
         store.append(&[genesis.header]).unwrap();
         assert_eq!(store.height(), 1);
         let _ = std::fs::remove_file(path);
@@ -111,8 +126,9 @@ mod tests {
     #[test]
     fn reject_invalid_pow() {
         let path = temp_file();
-        let mut store = HeaderStore::open(&path).unwrap();
-        let mut genesis = genesis_block(Network::Bitcoin).header;
+        let network = test_network();
+        let mut store = HeaderStore::open(&path, network).unwrap();
+        let mut genesis = genesis_block(network).header;
         genesis.nonce = 0;
         assert!(store.append(&[genesis]).is_err());
         let _ = std::fs::remove_file(path);

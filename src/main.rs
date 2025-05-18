@@ -1,9 +1,9 @@
 use bitcoin::blockdata::constants::genesis_block;
 use bitcoin::consensus::encode::serialize_hex;
 use bitcoin::Network;
-use clap::{ArgAction, Parser};
+use clap::{ArgAction, Parser, ValueEnum};
 use std::sync::{Arc, Mutex};
-mod base58;
+// mod base58; // Removed as the file is deleted
 mod p2p;
 mod rpc;
 mod storage;
@@ -15,8 +15,9 @@ struct CliOptions {
     #[arg(long = "no-rpc", action = ArgAction::SetFalse, default_value_t = true)]
     enable_rpc: bool,
 
-    /// Address of peer to connect to
-    peer_addr: Option<String>,
+    /// Address of peer to connect to. Use "0" for no connection.
+    #[arg(long = "connect")]
+    connect: Option<String>,
 
     /// Display current block height
     #[arg(long)]
@@ -29,19 +30,41 @@ struct CliOptions {
     /// Address to bind the RPC server
     #[arg(long = "rpc-addr", default_value = "127.0.0.1:8080")]
     rpc_addr: String,
+
+    /// Network to use (mainnet, testnet, regtest)
+    #[arg(long, value_enum, default_value_t = BitcoinNetwork::Mainnet)]
+    network: BitcoinNetwork,
+}
+
+#[derive(ValueEnum, Copy, Clone, Debug, PartialEq)]
+enum BitcoinNetwork {
+    Mainnet,
+    Testnet,
+    Regtest,
+}
+
+impl From<BitcoinNetwork> for Network {
+    fn from(val: BitcoinNetwork) -> Self {
+        match val {
+            BitcoinNetwork::Mainnet => Network::Bitcoin,
+            BitcoinNetwork::Testnet => Network::Testnet,
+            BitcoinNetwork::Regtest => Network::Regtest,
+        }
+    }
 }
 
 fn parse_args(args: &[String]) -> Result<CliOptions, String> {
     CliOptions::try_parse_from(args).map_err(|e| e.to_string())
 }
 
-fn genesis_hex() -> String {
-    let genesis = genesis_block(Network::Bitcoin);
+fn genesis_hex(network: Network) -> String {
+    let genesis = genesis_block(network);
     serialize_hex(&genesis)
 }
 
 #[tokio::main]
 async fn main() {
+    env_logger::init();
     let args: Vec<String> = std::env::args().collect();
     let opts = match parse_args(&args) {
         Ok(o) => o,
@@ -51,7 +74,16 @@ async fn main() {
         }
     };
     let enable_rpc = opts.enable_rpc;
-    let peer_addr = opts.peer_addr.clone();
+    let mut peer_connect_addr = opts.connect.clone();
+
+    // Handle --connect=0 to mean no connection
+    if let Some(addr) = &peer_connect_addr {
+        if addr == "0" {
+            peer_connect_addr = None;
+        }
+    }
+
+    let network: Network = opts.network.into();
 
     let status = Arc::new(Mutex::new(rpc::NodeStatus {
         block_height: 0,
@@ -69,16 +101,16 @@ async fn main() {
         None
     };
 
-    if let Some(addr) = peer_addr {
-        println!("Connecting to {}...", addr);
-        match p2p::Peer::connect(&addr) {
+    if let Some(addr) = peer_connect_addr {
+        println!("Connecting to {} on {} network...", addr, network);
+        match p2p::Peer::connect(&addr, network) {
             Ok(mut peer) => match peer.handshake().await {
                 Ok(_) => {
                     println!("Handshake with {} successful", addr);
                     let mut s = status.lock().unwrap();
                     s.peers.push(addr.clone());
                     if opts.show_height {
-                        match peer.sync_headers(&opts.headers_path).await {
+                        match peer.sync_headers(&opts.headers_path, network).await {
                             Ok(h) => {
                                 s.block_height = h;
                                 println!("Current block height: {}", h);
@@ -92,8 +124,8 @@ async fn main() {
             Err(e) => eprintln!("Connection error: {}", e),
         }
     } else {
-        let hex = genesis_hex();
-        println!("Bitcoin genesis block:\n{}", hex);
+        let hex = genesis_hex(network);
+        println!("Bitcoin genesis block ({}):\\n{}", network, hex);
         if opts.show_height {
             let h = status.lock().unwrap().block_height;
             println!("Current block height: {}", h);
@@ -107,7 +139,7 @@ mod tests {
 
     #[test]
     fn genesis_hex_matches_known_value() {
-        let hex = genesis_hex();
+        let hex = genesis_hex(Network::Bitcoin);
         assert!(hex.starts_with("01000000"));
     }
 
@@ -134,21 +166,28 @@ mod tests {
         let args = vec!["prog".into(), "--height".into()];
         let opts = parse_args(&args).unwrap();
         assert!(opts.show_height);
-        assert!(opts.peer_addr.is_none());
+        assert!(opts.connect.is_none());
         assert!(opts.enable_rpc);
         assert_eq!(opts.headers_path, "headers.bin");
         assert_eq!(opts.rpc_addr, "127.0.0.1:8080");
+        assert_eq!(opts.network, BitcoinNetwork::Mainnet);
     }
 
     #[test]
     fn parse_args_peer_and_height() {
-        let args = vec!["prog".into(), "--height".into(), "127.0.0.1:8333".into()];
+        let args = vec![
+            "prog".into(),
+            "--height".into(),
+            "--connect".into(),
+            "127.0.0.1:8333".into(),
+        ];
         let opts = parse_args(&args).unwrap();
         assert!(opts.show_height);
-        assert_eq!(opts.peer_addr, Some("127.0.0.1:8333".into()));
+        assert_eq!(opts.connect, Some("127.0.0.1:8333".into()));
         assert!(opts.enable_rpc);
         assert_eq!(opts.headers_path, "headers.bin");
         assert_eq!(opts.rpc_addr, "127.0.0.1:8080");
+        assert_eq!(opts.network, BitcoinNetwork::Mainnet);
     }
 
     #[test]
@@ -177,5 +216,26 @@ mod tests {
         let args = vec!["prog".into(), "--rpc-addr".into(), "0.0.0.0:9999".into()];
         let opts = parse_args(&args).unwrap();
         assert_eq!(opts.rpc_addr, "0.0.0.0:9999");
+    }
+
+    #[test]
+    fn parse_args_network_regtest() {
+        let args = vec!["prog".into(), "--network".into(), "regtest".into()];
+        let opts = parse_args(&args).unwrap();
+        assert_eq!(opts.network, BitcoinNetwork::Regtest);
+    }
+
+    #[test]
+    fn parse_args_connect_0_means_no_connection() {
+        let args_with_connect_0 = vec!["prog".into(), "--connect".into(), "0".into()];
+        let opts_connect_0 = parse_args(&args_with_connect_0).unwrap();
+
+        // We need to check the logic within main, parse_args just gives us the Some("0")
+        // This test verifies that CliOptions parses it correctly.
+        assert_eq!(opts_connect_0.connect, Some("0".to_string()));
+
+        // To test the actual behavior of not connecting, we'd need a more involved test
+        // or check the `peer_connect_addr` variable after the logic in `main`.
+        // For now, this test just ensures the arg is parsed.
     }
 }
